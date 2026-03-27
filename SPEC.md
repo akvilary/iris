@@ -58,7 +58,10 @@ for item in collection:
     process(item)
 
 for i in 0..10:
-    echo(i)
+    echo(i)             # 0, 1, 2, ..., 10 (inclusive)
+
+for i in 0..<10:
+    echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
 # Named loops via as — for break/continue targeting a specific loop
 while true as outer:
