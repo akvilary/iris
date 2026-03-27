@@ -409,12 +409,12 @@ enum Direction*:
     north, south, east, west
 
 let d = Direction.north
-echo(d)                         # "north"
-echo(ord(d))                    # 0
+echo(d)                         # 0 (enum is always int)
+echo($d)                        # "north" ($ returns variant name)
 
 # Iterate over all values
 for dir in Direction:
-    echo(dir)
+    echo($dir)
 
 # Sets
 let dirs: set[Direction] = {Direction.north, Direction.south}
@@ -424,7 +424,28 @@ if Direction.north in dirs:
 # Explicit numeric values
 enum Color*:
     red = 0, green = 1, blue = 2
+
+# String values — $ returns the string value instead of variant name
+enum HttpMethod*:
+    get = "GET"
+    post = "POST"
+    put = "PUT"
+    delete = "DELETE"
+
+echo(HttpMethod.get)            # 0 (int)
+echo($HttpMethod.get)           # "GET" ($ returns string value)
+
+enum LogLevel*:
+    debug = "DEBUG"
+    info = "INFO"
+    warn = "WARNING"
+    error = "ERROR"
+
+echo($LogLevel.warn)            # "WARNING"
 ```
+
+`$` operator: returns the string value if defined, otherwise the variant name.
+Enum value without `$` is always `int`.
 
 #### Enum with data (algebraic type / sum type)
 
