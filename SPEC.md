@@ -13,6 +13,7 @@ with Rust-level memory safety. "Safe Nim."
 ## Syntax
 
 - Indentation-based blocks (like Nim/Python)
+- 2 spaces per indent level (enforced by `iris fmt`)
 - No semicolons
 - No curly braces for blocks
 - Naming convention: pascalCase
