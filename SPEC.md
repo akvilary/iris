@@ -845,6 +845,45 @@ let status = block b:
   b.result = if isReady: "ok" else: "waiting"
 ```
 
+### Thread Safety
+
+Data races are impossible — prevented at compile time by the borrow checker.
+If data is passed to a `spawn`, no other spawn can access it mutably.
+
+```
+var data = @[1, 2, 3]
+
+# COMPILE ERROR — two spawns cannot mutate the same data:
+block b:
+  b.spawn:
+    data.add(4)          # ERROR: mutable borrow conflict
+  b.spawn:
+    data.add(5)          # ERROR: data already borrowed
+
+# OK — communicate via channels instead of shared memory:
+let ch = channel[int](2)
+block b:
+  b.spawn:
+    ch.send(4)
+  b.spawn:
+    ch.send(5)
+
+# OK — each spawn gets its own data:
+block b:
+  b.spawn:
+    var local = @[1, 2]
+    local.add(3)
+  b.spawn:
+    var local = @[4, 5]
+    local.add(6)
+```
+
+| Problem | Prevented? | How |
+|---------|-----------|-----|
+| Data races | **Yes, compile-time** | Borrow checker forbids shared mutable state |
+| Race conditions | Risk reduced | Channels, structured concurrency |
+| Deadlocks | No | Same as all languages |
+
 ### Structured Concurrency
 
 ```
@@ -905,9 +944,23 @@ server.cancel()       # explicit stop
 
 ### Channels + Select
 
+Channels transfer ownership — sender loses access, no shared mutable state.
+Primitive types (int, float, bool) are copied. Complex types are moved.
+
+No unbounded channels — always explicit size to prevent memory leaks.
+`send` blocks when buffer is full. `receive` blocks when buffer is empty.
+
 ```
+# Buffered — blocks send when full:
 let ch = channel[int](10)
 
+# Unbuffered — blocks send until someone calls receive:
+let ch = channel[int](0)
+
+# Explicit receive:
+let val = ch.receive()      # blocks until value available
+
+# select — multiple channels, timeouts:
 block b:
   b.spawn:
     ch.send(42)
@@ -919,6 +972,16 @@ while true:
     after 5.sec:
       echo("Timeout!")
       break
+
+# Ownership transfer — sender loses access:
+let ch = channel[seq[int]](1)
+var data = @[1, 2, 3]
+ch.send(data)           # data MOVED into channel
+# echo(data)            # ERROR: data was moved
+
+# To send and keep — explicit clone:
+ch.send(data.clone())   # send a copy
+echo(data)              # OK — original still available
 ```
 
 ### No Colored Functions (no async/await)
