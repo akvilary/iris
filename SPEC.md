@@ -175,6 +175,13 @@ Compiler verifies that `result` is set on all execution paths.
 
 ## Memory Model
 
+Every variable lives until the end of its scope (function or block).
+When the scope ends, the variable is destroyed. No GC, no reference counting.
+The compiler verifies all of this automatically.
+
+**When to use `block.alloc`:** only when you have cyclic references
+(A references B and B references A). Everything else is automatic.
+
 ### Ownership + Borrow Checker
 
 Default is immutable borrow. Annotations for other modes:
@@ -201,27 +208,53 @@ fn normalize(own var data: []byte) -> []byte:  # own + mutate
     data
 ```
 
-### Lifetimes
-
-No manual lifetime annotations. Compiler infers lifetimes automatically
-and verifies correctness at call site (same as duck typing for generics).
+#### Regular code — just write code, everything is automatic
 
 ```
-fn longest(x: string, y: string) -> string:
-    result = if x.len > y.len: x else: y
+fn handle(request: Request) -> Response !Error:
+    let user = db.getUser(request.userId)?
+    let posts = db.getPosts(user.id)?
+    result = Response.new(user, posts)
+# <- user, posts, everything destroyed automatically
 
-# Compiler verifies at call site that result doesn't outlive x and y:
-let a = "hello"
-let b = "world"
-let long = longest(a, b)    # OK: a, b, long are in the same scope
+fn process():
+    let a = "hello"
+    let b = "world"
+    let long = longest(a, b)    # compiler knows: a, b, long same scope
+    echo(long)                   # OK
+# <- a, b, long destroyed
 ```
 
-### Memory Regions (block.alloc)
+No lifetime annotations. No manual memory management.
+Compiler tracks scopes and verifies borrows automatically.
 
-Region-based memory management via `block.alloc`.
-For cyclic structures and graphs.
+### Cyclic References (block.alloc)
 
-#### Rules
+The only case where you need explicit memory management:
+**A references B and B references A.** The borrow checker cannot handle
+cycles — use `block.alloc` to put cyclic data in a memory region.
+
+```
+# Cyclic references — need block.alloc:
+fn buildDom() -> string:
+    block pool:
+        let parent = pool.alloc(Element("div"))
+        let child = pool.alloc(Element("span"))
+        parent.addChild(child)    # parent -> child
+        child.parent = parent      # child -> parent (cycle!)
+        result = parent.render().clone()
+    # <- pool destroyed, all memory freed in O(1)
+
+# NOT cyclic — no block needed, just regular code:
+fn buildList() -> string:
+    let items = seq[Item].new()
+    items.add(Item("first"))
+    items.add(Item("second"))     # items owns the data, no cycles
+    result = items.toString()
+# <- items destroyed automatically
+```
+
+#### block.alloc rules
 
 1. One Block handle per function — a function accepts at most one `Block`
 2. Cross-block linking is forbidden — data from different blocks cannot reference each other
@@ -232,27 +265,11 @@ Rationale: if two structures need to reference each other,
 they are by definition part of the same graph and live in one block.
 If not — they are independent and live in separate blocks.
 
-#### Examples
-
 ```
-# Cyclic references within one block — OK
-block pool:
-    let a = pool.alloc(Node("A"))
-    let b = pool.alloc(Node("B"))
-    a.link(b)
-    b.link(a)              # OK — same region
-# <- all memory freed in O(1)
-
-# Data cannot leave the block
-block pool:
-    let node = pool.alloc(Node("A"))
-    node                   # ERROR: node is bound to pool
-# Use .clone() to extract
-
 # Caller owns the block, function receives the handle
 block pool:
-    buildGraph(pool)       # function allocates inside pool
-    traverse(pool.root)    # use the data
+    buildGraph(pool)
+    traverse(pool.root)
 # <- everything freed
 
 fn buildGraph(pool: Block):
