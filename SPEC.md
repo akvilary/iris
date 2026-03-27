@@ -1,8 +1,9 @@
-# Slang Language Specification
+# Iris Language Specification
 
 ## Overview
 
-Slang is a compiled systems programming language.
+Iris is a compiled systems programming language.
+File extension: `.is`
 Compiles to C (later C++, JavaScript).
 Compiler is written in Rust (bootstrap), then self-hosting.
 
@@ -23,7 +24,7 @@ with Rust-level memory safety. "Safe Nim."
 Top-level code executes directly, no `main` required:
 
 ```
-# hello.sl — just runs
+# hello.is — just runs
 echo("hello world")
 
 let x = 42
@@ -34,7 +35,7 @@ For libraries — `when isMain:` to run code only when file is executed directly
 (not when imported):
 
 ```
-# myLib.sl
+# myLib.is
 fn helper*(x: int) -> int:
     result = x + 1
 
@@ -418,8 +419,8 @@ fn createBuffer*(size: natural) -> Buffer:
 
 ### Option
 
-No null/nil in Slang. `Option[T]` represents a value that may or may not exist.
-Works with `?`, `match`, and `else` — same patterns as error handling.
+No null/nil in Iris. `Option[T]` represents a value that may or may not exist.
+Works with `?`, `case of`, and `else` — same patterns as error handling.
 
 ```
 # Creating
@@ -428,7 +429,7 @@ let b = none[int]()         # Option[int] without value
 
 # Pattern matching
 match a:
-    some(val): echo(val)     # 42
+    some(val): echo(val)          # 42
     none: echo("nothing")
 
 # else — default value
@@ -483,7 +484,7 @@ let result = buf.toString()          # final immutable string
 - Static typing
 - Generics without explicit constraints (duck typing at instantiation, like Nim)
   - Compiler checks at call site, not at declaration
-  - `slang check --api-compat` for checking breaking changes
+  - `iris check --api-compat` for checking breaking changes
 - Pattern matching with exhaustiveness checking
 - Concepts (compile-time duck typing with a name, like Nim)
 - No null/nil — only `Option[T]`
@@ -567,7 +568,7 @@ all variants are handled. Use `else` to catch remaining cases,
 match direction:
     Direction.north: goUp()
     Direction.south: goDown()
-    else: discard                # explicitly ignore east, west
+    else: discard                    # explicitly ignore east, west
 ```
 
 No `_:` wildcard — use `else:` instead. `match` must always be exhaustive
@@ -604,7 +605,7 @@ fn sort[T: Comparable](var list: slice[T]):
 fn sort[T](var list: slice[T]):
     ...
 # error: type Socket has no method 'lessThan'
-#   called from sort() at main.sl:10
+#   called from sort() at main.is:10
 ```
 
 A type automatically satisfies a concept if it has the required methods:
@@ -635,18 +636,18 @@ fn printAll[T: Printable](items: slice[T]):
 
 ## Metaprogramming
 
-Macros are a core feature of Slang. Written in Slang itself,
+Macros are a core feature of Iris. Written in Iris itself,
 they operate on AST at compile-time. Three levels from simple to powerful.
 
 ### Principles
 
-- Written in Slang itself (not a separate language)
+- Written in Iris itself (not a separate language)
 - Operate on AST at compile-time
 - Hygienic (no accidental name collisions)
 - Type-safe where possible
-- Debuggable (`slang expand` shows macro output)
+- Debuggable (`iris expand` shows macro output)
 - Applied by calling the macro directly (like Nim), no special decorator syntax
-- Visibility via `*` (like everything else in Slang)
+- Visibility via `*` (like everything else in Iris)
 - Can generate types, functions, entire modules
 
 ### Templates — inline substitution
@@ -719,8 +720,8 @@ let page = html:
 ### Tooling
 
 ```
-slang expand file.sl          # show code after all macro expansions
-slang expand --macro=html     # show what a specific macro generated
+iris expand file.is          # show code after all macro expansions
+iris expand --macro=html     # show what a specific macro generated
 ```
 
 ## Block — universal construct
@@ -871,7 +872,7 @@ In languages with async/await, functions are split into two worlds — sync and 
 Async "infects" the entire call chain: one async function forces all callers
 to also be async. This is known as the "colored functions" problem.
 
-Slang has **no async/await**. All functions are the same:
+Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
@@ -983,14 +984,14 @@ let cfg = readConfig("app.toml") else error:
 
 ## Tooling (built into compiler)
 
-- `slang build` — build (+ cross-compilation `--target=...`)
-- `slang fmt` — mandatory formatter
-- `slang test` — run tests
-- `slang run file.sl` — run
-- `slang deps` — dependency manager
-- `slang check --api-compat` — API compatibility check
-- `slang expand file.sl` — show code after macro expansion
-- `slang expand --macro=name` — show output of a specific macro
+- `iris build` — build (+ cross-compilation `--target=...`)
+- `iris fmt` — mandatory formatter
+- `iris test` — run tests
+- `iris run file.is` — run
+- `iris deps` — dependency manager
+- `iris check --api-compat` — API compatibility check
+- `iris expand file.is` — show code after macro expansion
+- `iris expand --macro=name` — show output of a specific macro
 - LSP — developed in parallel with the compiler
 
 ## Compilation Targets
