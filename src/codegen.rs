@@ -36,14 +36,6 @@ impl CodeGen {
         self.output.push('\n');
     }
 
-    fn emit_joined<F>(&mut self, items: &[impl std::fmt::Debug], sep: &str, f: F)
-    where F: Fn(&mut Self, usize) {
-        for (i, _) in items.iter().enumerate() {
-            if i > 0 { self.emit(sep); }
-            f(self, i);
-        }
-    }
-
     // ── Type mapping ──
 
     fn type_to_c(&self, t: &TypeExpr) -> String {
@@ -132,7 +124,7 @@ impl CodeGen {
         // Forward declarations
         let decls: Vec<String> = stmts.iter().filter_map(|s| {
             if let Stmt::FnDecl { name, params, return_type, .. } = s {
-                let ret = return_type.as_ref().map(|t| self.type_to_c(t)).unwrap_or("void".to_string());
+                let ret = return_type.as_ref().map(|t| self.type_to_c(t)).unwrap_or_else(|| "void".to_string());
                 Some(format!("{} {}({});", ret, name, self.format_params(params)))
             } else {
                 None
@@ -254,7 +246,7 @@ impl CodeGen {
     }
 
     fn gen_fn(&mut self, name: &str, params: &[Param], return_type: &Option<TypeExpr>, body: &[Stmt]) {
-        let ret = return_type.as_ref().map(|t| self.type_to_c(t)).unwrap_or("void".to_string());
+        let ret = return_type.as_ref().map(|t| self.type_to_c(t)).unwrap_or_else(|| "void".to_string());
         let has_return = return_type.is_some();
         let params_str = self.format_params(params);
 

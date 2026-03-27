@@ -28,30 +28,34 @@ fn compile_to_c(source: &str) -> CompileResult<String> {
     Ok(codegen.generate(&stmts))
 }
 
+fn io_error(msg: String) -> error::CompileError {
+    error::CompileError::new(msg, 0, 0)
+}
+
+fn path_to_str(p: &Path) -> CompileResult<&str> {
+    p.to_str().ok_or_else(|| io_error(format!("invalid path: {}", p.display())))
+}
+
 fn build_binary(source: &str, input: &Path) -> CompileResult<String> {
     let c_code = compile_to_c(source)?;
     let c_path = input.with_extension("c");
     let bin_path = input.with_extension("");
 
-    fs::write(&c_path, &c_code).map_err(|e| {
-        error::CompileError::new(format!("cannot write {}: {}", c_path.display(), e), 0, 0)
-    })?;
+    fs::write(&c_path, &c_code)
+        .map_err(|e| io_error(format!("cannot write {}: {}", c_path.display(), e)))?;
 
     let status = Command::new("cc")
-        .args([
-            c_path.to_str().unwrap(),
-            "-o", bin_path.to_str().unwrap(),
-        ])
+        .args([path_to_str(&c_path)?, "-o", path_to_str(&bin_path)?])
         .status()
-        .map_err(|e| error::CompileError::new(format!("cannot run cc: {}", e), 0, 0))?;
+        .map_err(|e| io_error(format!("cannot run cc: {}", e)))?;
 
     let _ = fs::remove_file(&c_path);
 
     if !status.success() {
-        return Err(error::CompileError::new("C compilation failed", 0, 0));
+        return Err(io_error("C compilation failed".to_string()));
     }
 
-    Ok(bin_path.to_str().unwrap().to_string())
+    Ok(path_to_str(&bin_path)?.to_string())
 }
 
 fn main() {
@@ -78,15 +82,11 @@ fn main() {
     let result = match command.as_str() {
         "tokens" => {
             let mut lexer = Lexer::new(&source);
-            match lexer.tokenize() {
-                Ok(tokens) => {
-                    for tok in &tokens {
-                        println!("{:4}:{:<3} {:?}", tok.line, tok.col, tok.kind);
-                    }
-                    Ok(())
+            lexer.tokenize().map(|tokens| {
+                for tok in &tokens {
+                    println!("{:4}:{:<3} {:?}", tok.line, tok.col, tok.kind);
                 }
-                Err(e) => Err(e),
-            }
+            })
         }
         "parse" => {
             compile_to_ast(&source).map(|stmts| {
