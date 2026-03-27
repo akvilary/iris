@@ -47,7 +47,9 @@ when isMain:
 
 ## Loops
 
-Only `while` and `for`. No `loop`. Named loops via `@label`:
+Only `while` and `for`. No `loop`. Named loops via `@label`.
+
+A loop is a block — spawns are cancelled and memory is freed on exit.
 
 ```
 # while
@@ -73,6 +75,35 @@ while true @outer:
       break @outer        # exit while entirely
     if item.id < 0:
       continue @inner     # skip to next for iteration
+```
+
+### Loop as expression
+
+Loops can return values via `result`. If the loop may complete without
+`break`, an `else` clause is required by the compiler:
+
+```
+# while true — always breaks, result always set:
+let input = while true @loop:
+  let line = readLine()
+  if not line.isEmpty:
+    result = line
+    break @loop
+
+# for — may complete without break, else required:
+let found = for item in list @search:
+  if item.matches(query):
+    result = item
+    break @search
+else:
+  result = defaultItem
+
+# Spawns inside loop are cancelled on break:
+for url in urls @urls:
+  spawn:
+    fetch(url)
+  if timeout:
+    break @urls          # all spawns cancelled, memory freed
 ```
 
 ## Expressions
