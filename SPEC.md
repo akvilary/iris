@@ -553,8 +553,8 @@ enum Shape*:
 
 fn area*(s: Shape) -> float:
   result = match s:
-    Circle(r): PI * r * r
-    Rect(w, h): w * h
+    Circle as c: PI * c.radius * c.radius
+    Rect as r: r.w * r.h
     Point: 0.0
 ```
 
@@ -943,10 +943,8 @@ match readConfig("app.toml") as cfg:
     start(cfg)
   error(IoError.notFound):
     createDefault()
-  error(ParseError.syntax(line)):
-    echo("Syntax error at line {line}")
-  error(e):
-    fatal("Error: {e}")
+  error as e:
+    quit(e)
 ```
 
 Exhaustiveness checking — compiler guarantees all variants are handled.
