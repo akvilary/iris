@@ -373,9 +373,9 @@ fn buildGraph(pool: Pool) -> Node:
   let a = pool.alloc(Node("A"))
   let b = pool.alloc(Node("B"))
   let c = pool.alloc(Node("C"))
-  a.link(b)
-  b.link(c)
-  c.link(a)         # cycle
+  a.neighbors.add(b)
+  b.neighbors.add(c)
+  c.neighbors.add(a)   # cycle!
   result = a
 
 fn traverse(node: Node):
