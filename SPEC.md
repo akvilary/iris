@@ -131,7 +131,7 @@ let name = case color:
 
 ## Truthiness
 
-`if x` only works on `bool`, `Option[T]`, and `Result[T, E]`.
+`if x` only works on `bool`, `Option[T]`, and result unions (`T | !E`).
 Other types require explicit comparison — compiler error otherwise.
 
 ```
@@ -143,7 +143,7 @@ let a = some(42)
 if a:
   echo(a.get())        # .get() to extract value
 
-# Result — true if ok:
+# Result union — true if ok:
 let cfg = readConfig("app.toml")
 if cfg:
   start(cfg.get())     # .get() to extract value
@@ -275,7 +275,7 @@ fn funcName*(param1: Type1, param2: Type2) -> ReturnType | !ErrorType:
 ```
 
 - `*` after name = public
-- `| !ErrorType` = function can return an error (expands to Result)
+- `| !ErrorType` = function can return an error (result union)
 - Multiple error types: `-> ReturnType | !ErrA | !ErrB`
 - `?` operator for error propagation
 
@@ -1139,7 +1139,8 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-A function with `| !ErrorType` in its signature returns a Result under the hood.
+A function with `| !ErrorType` in its signature returns a result union.
+`T | !E` syntax works everywhere — signatures, parameters, type aliases.
 `result` sets the success value. Errors are returned via `raise`.
 
 ### Returning errors from a function (function author)
