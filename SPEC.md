@@ -53,7 +53,7 @@ type Shape*:
     Circle(radius: float)
     Rect(w: float, h: float)
 
-trait Drawable*:
+concept Drawable*:
     fn draw(self)
 
 const maxRetries* = 3
@@ -192,30 +192,37 @@ let long = longest(a, b)    # ОК: a, b, long — в одном scope
 ### Memory Regions (block.alloc)
 
 Region-based memory management через `block.alloc`.
-Для циклических структур и графов:
+Для циклических структур и графов.
+
+#### Правила
+
+1. Один Block handle на функцию — функция принимает максимум один `Block`
+2. Cross-block linking запрещён — данные из разных блоков не могут ссылаться друг на друга
+3. Данные из `block.alloc` не могут покинуть block (если нужно — `.clone()`)
+4. Если block не использует `.alloc` — аллокатор не создаётся (zero overhead)
+
+Обоснование: если двум структурам нужно ссылаться друг на друга,
+они по определению часть одного графа и живут в одном block.
+Если не нужно — они независимы и живут в разных блоках.
+
+#### Примеры
 
 ```
+# Циклические ссылки внутри одного block — ОК
 block pool:
     let a = pool.alloc(Node("A"))
     let b = pool.alloc(Node("B"))
     a.link(b)
-    b.link(a)              # циклическая ссылка — ОК, один регион
-# <- вся память региона освобождена за O(1)
-```
+    b.link(a)              # ОК — один регион
+# <- вся память освобождена за O(1)
 
-Данные из `block.alloc` не могут покинуть block:
-
-```
+# Данные не могут покинуть block
 block pool:
     let node = pool.alloc(Node("A"))
     node                   # ОШИБКА: node привязан к pool
 # Если нужно вынести — явный .clone()
-```
 
-Вызывающий код владеет block, функции принимают handle
-(как передача аллокатора в Zig):
-
-```
+# Вызывающий код владеет block, функция принимает handle
 block pool:
     buildGraph(pool)       # функция аллоцирует внутри pool
     traverse(pool.root)    # используем данные
@@ -227,9 +234,16 @@ fn buildGraph(pool: Block):
     a.link(b)
     b.link(a)
     pool.root = a
-```
 
-Если block не использует `.alloc` — аллокатор не создаётся (zero overhead).
+# Два независимых графа — два отдельных block
+block userPool:
+    buildUserGraph(userPool)
+    processUsers(userPool.root)
+
+block rolePool:
+    buildRoleGraph(rolePool)
+    processRoles(rolePool.root)
+```
 
 ## Collections
 
@@ -329,12 +343,12 @@ let result = buf.toString()          # финальная immutable string
   - Компилятор проверяет при вызове, не при объявлении
   - `slang check --api-compat` для проверки breaking changes
 - Pattern matching с exhaustiveness checking
-- Traits (interfaces)
+- Concepts (compile-time duck typing с именем, как в Nim)
 - Нет null/nil — только `Option[T]`
-- Нет наследования классов — только композиция и traits
+- Нет наследования классов — только композиция
 - Нет неявных преобразований — только явные `.into()`
 - Nominal typing (два типа с одинаковыми полями ≠ один тип)
-- Structural typing через traits
+- Structural typing через concepts
 
 ### Enum
 
@@ -385,11 +399,64 @@ fn area*(s: Shape) -> float:
 Pattern matching с exhaustiveness checking — компилятор гарантирует,
 что все варианты обработаны.
 
+### Concepts
+
+Именованный набор требований к типу. Чисто compile-time, zero overhead.
+Не требует `impl` — если тип подходит, он автоматически удовлетворяет concept.
+
+```
+concept Printable:
+    fn toString(self) -> string
+
+concept Comparable:
+    fn lessThan(self, other: Self) -> bool
+    fn equals(self, other: Self) -> bool
+
+concept Serializable:
+    fn toJson(self) -> string
+    fn fromJson(raw: string) -> Self
+```
+
+Использование — **опционально**, для документации и лучших ошибок компилятора:
+
+```
+# С concept — лучшие сообщения об ошибках:
+fn sort[T: Comparable](var list: []T):
+    ...
+# error: type Socket does not satisfy concept Comparable
+#   missing: fn lessThan(self, other: Socket) -> bool
+
+# Без concept — тоже работает, duck typing на call site:
+fn sort[T](var list: []T):
+    ...
+# error: type Socket has no method 'lessThan'
+#   called from sort() at main.sl:10
+```
+
+Тип автоматически удовлетворяет concept если у него есть нужные методы:
+
+```
+type User:
+    name: string
+    age: int
+
+fn toString(self: User) -> string:
+    result = "{self.name}, {self.age}"
+
+# User автоматически удовлетворяет Printable — есть toString
+# Никакого impl, никакой регистрации
+```
+
 ### Generics
 
 ```
 fn map[T, U](list: []T, f: fn(T) -> U) -> []U:
     result = [f(x) for x in list]
+
+# С concept constraint (опционально):
+fn printAll[T: Printable](items: []T):
+    for item in items:
+        echo(item.toString())
 ```
 
 ## Block — универсальная конструкция
