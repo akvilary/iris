@@ -186,7 +186,8 @@ counter = counter + 1              # OK
 
 ## Attributes
 
-Type fields are defined with `@` prefix. This allows using reserved words as field names:
+Type fields and enum variants are defined with `@` prefix.
+This allows using reserved words as names:
 
 ```
 type User:
@@ -197,6 +198,9 @@ type JsonResponse:
   @for: string         # reserved word — OK with @
   @type: string        # reserved word — OK with @
   @data: int
+
+enum Status:
+  @ok, @error, @pending   # reserved words — OK with @
 ```
 
 Access fields the same way:
@@ -739,7 +743,7 @@ Supports iteration, `ord`, sets:
 
 ```
 enum Direction*:
-  north, south, east, west
+  @north, @south, @east, @west
 
 let d = Direction.north
 echo(d)                         # 0 (enum is always int)
@@ -747,32 +751,32 @@ echo($d)                        # "north" ($ returns variant name)
 
 # Iterate over all values
 for dir in Direction:
-    echo($dir)
+  echo($dir)
 
 # Sets
 let dirs: set[Direction] = {Direction.north, Direction.south}
 if Direction.north in dirs:
-    echo("going north")
+  echo("going north")
 
 # Explicit numeric values
 enum Color*:
-  red = 0, green = 1, blue = 2
+  @red = 0, @green = 1, @blue = 2
 
 # String values — $ returns the string value instead of variant name
 enum HttpMethod*:
-  get = "GET"
-  post = "POST"
-  put = "PUT"
-  delete = "DELETE"
+  @get = "GET"
+  @post = "POST"
+  @put = "PUT"
+  @delete = "DELETE"
 
 echo(HttpMethod.get)            # 0 (int)
 echo($HttpMethod.get)           # "GET" ($ returns string value)
 
 enum LogLevel*:
-  debug = "DEBUG"
-  info = "INFO"
-  warn = "WARNING"
-  error = "ERROR"
+  @debug = "DEBUG"
+  @info = "INFO"
+  @warn = "WARNING"
+  @error = "ERROR"
 
 echo($LogLevel.warn)            # "WARNING"
 ```
@@ -784,9 +788,9 @@ Enum value without `$` is always `int`.
 
 ```
 enum Shape*:
-  Circle(radius: float)
-  Rect(w: float, h: float)
-  Point                        # variant without data — also OK
+  @Circle(radius: float)
+  @Rect(w: float, h: float)
+  @Point                        # variant without data — also OK
 
 fn area*(s: Shape) -> float:
   result = case s:
@@ -801,8 +805,10 @@ all variants are handled. Use `else` to catch remaining cases,
 
 ```
 case direction:
-  of Direction.north: goUp()
-  of Direction.south: goDown()
+  of Direction.north:
+    goUp()
+  of Direction.south:
+    goDown()
 else: discard                        # explicitly ignore east, west
 ```
 

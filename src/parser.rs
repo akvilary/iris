@@ -330,6 +330,7 @@ impl Parser {
         self.skip_newlines();
 
         let variants = self.parse_indented_items(|p| {
+            p.expect(&TokenKind::At)?;
             let vname = p.parse_ident_name()?;
             let value = p.parse_enum_value()?;
             if p.at(&TokenKind::Comma) { p.advance(); }
