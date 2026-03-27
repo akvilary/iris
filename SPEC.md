@@ -6,6 +6,9 @@ Slang is a compiled systems programming language.
 Compiles to C (later C++, JavaScript).
 Compiler is written in Rust (bootstrap), then self-hosting.
 
+**Identity:** Nim-level metaprogramming and multi-target compilation,
+with Rust-level memory safety. "Safe Nim."
+
 ## Syntax
 
 - Indentation-based blocks (like Nim/Python)
@@ -501,6 +504,96 @@ fn printAll[T: Printable](items: []T):
         echo(item.toString())
 ```
 
+## Metaprogramming
+
+Macros are a core feature of Slang. Written in Slang itself,
+they operate on AST at compile-time. Three levels from simple to powerful.
+
+### Principles
+
+- Written in Slang itself (not a separate language)
+- Operate on AST at compile-time
+- Hygienic (no accidental name collisions)
+- Type-safe where possible
+- Debuggable (`slang expand` shows macro output)
+- Applied via `@decorator` syntax
+- Visibility via `*` (like everything else in Slang)
+- Can generate types, functions, entire modules
+
+### Templates — inline substitution
+
+Simple compile-time code substitution, zero overhead:
+
+```
+template notEqual(a, b) -> bool:
+    not (a == b)
+
+# Usage — expanded at compile-time:
+if notEqual(x, y):
+    echo("different")
+
+# Expands to:
+# if not (x == y):
+#     echo("different")
+```
+
+### Macros — AST transformation
+
+Receive AST, return modified AST:
+
+```
+macro serializable*(body: Ast) -> Ast:
+    # adds toJson() and fromJson() methods to a type
+    let typeName = body.name
+    body.addFn:
+        fn toJson*(self) -> string:
+            var buf = StrBuf.new()
+            buf.add("{")
+            for i, field in body.fields:
+                if i > 0: buf.add(", ")
+                buf.add("\"{field.name}\": {self.{field.name}}")
+            buf.add("}")
+            result = buf.toString()
+    result = body
+
+# Usage:
+@serializable
+type User:
+    name*: string
+    age*: int
+
+# Compiler expands to:
+# type User:
+#     name*: string
+#     age*: int
+# fn toJson*(self: User) -> string:
+#     ...
+```
+
+### DSL — domain-specific languages
+
+Macros can parse custom syntax and generate code:
+
+```
+macro html(body: Ast) -> Ast:
+    # parse DSL and generate Element constructors
+    ...
+
+let page = html:
+    div(class: "container"):
+        h1: "Hello"
+        p: "World"
+
+# Expands to Element constructor calls
+```
+
+### Tooling
+
+```
+slang expand file.sl          # show code after all macro expansions
+slang expand --macro=html     # show what a specific macro generated
+```
+
 ## Block — universal construct
 
 `block` is the single building block for control flow, concurrency, scoping, and values.
@@ -767,6 +860,8 @@ let cfg = readConfig("app.toml") else error:
 - `slang run file.sl` — run
 - `slang deps` — dependency manager
 - `slang check --api-compat` — API compatibility check
+- `slang expand file.sl` — show code after macro expansion
+- `slang expand --macro=name` — show output of a specific macro
 - LSP — developed in parallel with the compiler
 
 ## Compilation Targets
