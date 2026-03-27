@@ -76,13 +76,23 @@ impl CodeGen {
         self.var_types.get(name).map(|t| t == "const char*").unwrap_or(false)
     }
 
+    fn var_c_type(&self, name: &str) -> Option<&str> {
+        self.var_types.get(name).map(|s| s.as_str())
+    }
+
     fn printf_format(&self, expr: &Expr) -> (&'static str, bool) {
         match expr {
             Expr::StringLit(_) | Expr::StringInterp { .. } => ("%s", false),
             Expr::FloatLit(_) => ("%f", false),
-            Expr::BoolLit(_) => ("%d", false),
-            Expr::Ident(name) if self.is_string_type(name) => ("%s", false),
-            _ => ("%lld", true), // needs (long long) cast
+            Expr::BoolLit(_) => ("%s", false),
+            Expr::Dollar(_) => ("%s", false),
+            Expr::Ident(name) => match self.var_c_type(name) {
+                Some("const char*") => ("%s", false),
+                Some("bool") => ("%s", false),
+                Some("double") | Some("float") => ("%f", false),
+                _ => ("%lld", true),
+            },
+            _ => ("%lld", true),
         }
     }
 
@@ -536,7 +546,7 @@ impl CodeGen {
                 self.emit("]");
             }
             Expr::StringInterp { parts } => self.gen_string_interp(parts),
-            Expr::Dollar(inner) => self.gen_expr(inner),
+            Expr::Dollar(inner) => self.gen_dollar(inner),
             Expr::Question(inner) => self.gen_expr(inner),
             Expr::ArrayLit(elems) | Expr::SeqLit(elems) => {
                 self.emit("{");
@@ -570,7 +580,7 @@ impl CodeGen {
                 let (fmt, needs_cast) = self.printf_format(arg);
                 self.emit(&format!("printf(\"{}\\n\", ", fmt));
                 if needs_cast { self.emit("(long long)"); }
-                self.gen_expr(arg);
+                self.gen_echo_arg(arg);
                 self.emit(")");
             }
         }
@@ -597,9 +607,49 @@ impl CodeGen {
             let (_, needs_cast) = self.printf_format(e);
             self.emit(", ");
             if needs_cast { self.emit("(long long)"); }
-            self.gen_expr(e);
+            self.gen_echo_arg(e);
         }
         self.emit(")");
+    }
+
+    /// Emit a value for printf, wrapping bools and $ conversions.
+    fn gen_echo_arg(&mut self, expr: &Expr) {
+        match expr {
+            Expr::BoolLit(b) => {
+                self.emit(if *b { "\"true\"" } else { "\"false\"" });
+            }
+            Expr::Ident(name) if self.var_c_type(name) == Some("bool") => {
+                self.emit(&format!("({} ? \"true\" : \"false\")", name));
+            }
+            Expr::Dollar(inner) => {
+                self.gen_dollar(inner);
+            }
+            _ => self.gen_expr(expr),
+        }
+    }
+
+    /// $ operator — convert to string representation.
+    fn gen_dollar(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Ident(name) => {
+                match self.var_c_type(name) {
+                    Some("bool") => self.emit(&format!("({} ? \"true\" : \"false\")", name)),
+                    Some("const char*") => self.emit(name),
+                    _ => {
+                        // For enum types with _to_string, use that
+                        for en in &self.enum_names.clone() {
+                            if self.var_c_type(name) == Some(en.as_str()) {
+                                self.emit(&format!("{}_to_string({})", en, name));
+                                return;
+                            }
+                        }
+                        // Default: emit as-is (will need snprintf for full support)
+                        self.emit(name);
+                    }
+                }
+            }
+            _ => self.gen_expr(expr),
+        }
     }
 
     fn gen_string_interp(&mut self, parts: &[StringPart]) {
