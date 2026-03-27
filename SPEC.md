@@ -159,14 +159,14 @@ fn classify*(n: int) -> string:
         result = "zero"
 
 # result can be set early and execution continues:
-fn process*(data: []byte) -> int:
+fn process*(data: slice[byte]) -> int:
     result = 0
     for b in data:
         result = result + b.toInt()
     log("sum computed")    # runs after, result already set
 
 # return — early exit (uses current result value):
-fn search*(list: []int, target: int) -> int:
+fn search*(list: slice[int], target: int) -> int:
     result = -1
     for i, val in list:
         if val == target:
@@ -200,13 +200,13 @@ Default is immutable borrow. Annotations for other modes:
 fn length(s: string) -> int:             # immutable borrow (default)
     s.len
 
-fn sort(var list: []int):                # mutable borrow
+fn sort(var list: slice[int]):                # mutable borrow
     ...
 
 fn send(own msg: Message):              # take ownership
     channel.push(msg)
 
-fn normalize(own var data: []byte) -> []byte:  # own + mutate
+fn normalize(own var data: slice[byte]) -> slice[byte]:  # own + mutate
     data.trim()
     data
 ```
@@ -294,30 +294,66 @@ block rolePool:
 
 ## Collections
 
-### Arrays, Sequences, Views
+### Arrays, Sequences, Slices
 
 | Syntax | What | Storage | Size |
 |--------|------|---------|------|
-| `[5]int` | Fixed-size array | Stack (inline) | Known at compile-time |
+| `array[int, 5]` | Fixed-size array | Stack (inline) | Known at compile-time |
 | `seq[int]` | Dynamic sequence | Heap | Grows at runtime |
-| `[]int` | View/slice (parameters only) | Reference to existing data | Pointer + length |
+| `slice[int]` | View/slice (parameters only) | Reference to existing data | Pointer + length |
 
 ```
 # Fixed array — stack
-let fixed: [5]int = [1, 2, 3, 4, 5]
+let fixed: array[int, 5] = [1, 2, 3, 4, 5]
 
-# Dynamic sequence — heap
-var dynamic: seq[int] = [1, 2, 3]
+# Dynamic sequence — heap, created with @[...]
+var dynamic = @[1, 2, 3]
 dynamic.add(4)
 
-# View — accepts both array and seq
-fn sum(arr: []int) -> int:
+# Explicit type annotation also works
+var other: seq[int] = @[10, 20, 30]
+
+# Empty seq
+var empty = seq[int]()
+
+# Slice — accepts both array and seq
+fn sum(arr: slice[int]) -> int:
     result = 0
     for x in arr:
         result = result + x
 
-sum(fixed)      # OK — view into stack array
-sum(dynamic)    # OK — view into seq
+sum(fixed)      # OK — slice into stack array
+sum(dynamic)    # OK — slice into seq
+```
+
+### Tuples
+
+Named and unnamed tuples for lightweight data grouping:
+
+```
+# Named tuple
+let point = (x: 10, y: 20)
+echo(point.x)              # 10
+echo(point.y)              # 20
+
+# Unnamed tuple
+let pair = (10, 20)
+echo(pair.0)                # 10
+
+# Tuple type
+type Point = tuple[x: int, y: int]
+
+# Return multiple values without defining a separate type
+fn divide*(a: int, b: int) -> (quotient: int, remainder: int):
+    result = (quotient: a / b, remainder: a % b)
+
+let r = divide(10, 3)
+echo(r.quotient)            # 3
+echo(r.remainder)           # 1
+
+# Destructuring
+let (q, rem) = divide(10, 3)
+echo(q)                      # 3
 ```
 
 ## Numeric Types
@@ -352,6 +388,41 @@ n = n - 10               # ERROR: natural cannot be negative
 fn createBuffer*(size: natural) -> Buffer:
     # size is guaranteed >= 0, no validation needed
     ...
+```
+
+### Option
+
+No null/nil in Slang. `Option[T]` represents a value that may or may not exist.
+Works with `?`, `match`, and `else` — same patterns as error handling.
+
+```
+# Creating
+let a = some(42)            # Option[int] with value
+let b = none[int]()         # Option[int] without value
+
+# Pattern matching
+match a:
+    some(val): echo(val)     # 42
+    none: echo("nothing")
+
+# else — default value
+let x = a else: 0           # 42 (has value)
+let y = b else: 0           # 0 (no value — fallback)
+
+# ? — propagate none (like ? for errors)
+fn findUser*(id: int) -> Option[User]:
+    let row = db.find(id)?   # if db.find returns none → function returns none
+    result = some(User.from(row))
+
+# Boolean checks
+if a.isSome:
+    echo("has value")
+
+if b.isNone:
+    echo("empty")
+
+# Chaining with ?
+let name = getUser(1)?.name  # none if user not found
 ```
 
 ## Strings
@@ -463,7 +534,18 @@ fn area*(s: Shape) -> float:
 ```
 
 Pattern matching with exhaustiveness checking — compiler guarantees
-all variants are handled.
+all variants are handled. Use `else` to catch remaining cases,
+`discard` to explicitly ignore:
+
+```
+match direction:
+    Direction.north: goUp()
+    Direction.south: goDown()
+    else: discard                # explicitly ignore east, west
+```
+
+No `_:` wildcard — use `else:` instead. `match` must always be exhaustive
+(all cases handled or `else` present).
 
 ### Concepts
 
@@ -487,13 +569,13 @@ Usage is **optional**, for documentation and better compiler errors:
 
 ```
 # With concept — better error messages:
-fn sort[T: Comparable](var list: []T):
+fn sort[T: Comparable](var list: slice[T]):
     ...
 # error: type Socket does not satisfy concept Comparable
 #   missing: fn lessThan(self, other: Socket) -> bool
 
 # Without concept — also works, duck typing at call site:
-fn sort[T](var list: []T):
+fn sort[T](var list: slice[T]):
     ...
 # error: type Socket has no method 'lessThan'
 #   called from sort() at main.sl:10
@@ -516,11 +598,11 @@ fn toString(self: User) -> string:
 ### Generics
 
 ```
-fn map[T, U](list: []T, f: fn(T) -> U) -> []U:
+fn map[T, U](list: slice[T], f: fn(T) -> U) -> seq[U]:
     result = [f(x) for x in list]
 
 # With concept constraint (optional):
-fn printAll[T: Printable](items: []T):
+fn printAll[T: Printable](items: slice[T]):
     for item in items:
         echo(item.toString())
 ```
@@ -537,7 +619,7 @@ they operate on AST at compile-time. Three levels from simple to powerful.
 - Hygienic (no accidental name collisions)
 - Type-safe where possible
 - Debuggable (`slang expand` shows macro output)
-- Applied via `@decorator` syntax
+- Applied by calling the macro directly (like Nim), no special decorator syntax
 - Visibility via `*` (like everything else in Slang)
 - Can generate types, functions, entire modules
 
@@ -577,11 +659,11 @@ macro serializable*(body: Ast) -> Ast:
             result = buf.toString()
     result = body
 
-# Usage:
-@serializable
-type User:
-    name*: string
-    age*: int
+# Usage — macro is just called, block is its AST argument:
+serializable:
+    type User:
+        name*: string
+        age*: int
 
 # Compiler expands to:
 # type User:
@@ -870,7 +952,7 @@ let cfg = readConfig("app.toml") else:
 let cfg = readConfig("app.toml") else error:
     match error:
         IoError.notFound: Config.default()
-        _: raise error     # propagate the rest
+        else: raise error  # propagate the rest
 ```
 
 ## Tooling (built into compiler)
