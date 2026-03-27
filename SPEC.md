@@ -77,24 +77,34 @@ while true as outer:
 
 ## Truthiness
 
-`if x` is true when x is **not none and not error**. Everything else is true:
+`if x` only works on `bool`, `Option[T]`, and `Result[T, E]`.
+Other types require explicit comparison — compiler error otherwise.
 
 ```
-# false:
-if none(int):          # false
-if someError:          # false
+# bool — standard:
+if isReady:            # OK
 
-# true — even if "empty":
-if 0:                  # true
-if "":                 # true
-if @[]:                # true
+# Option — true if some:
+let a = some(42)
+if a:
+  echo(a.get())        # .get() to extract value
 
-# For emptiness checks — use .isEmpty:
-if myString.isEmpty:   # true if string is ""
-if myList.isEmpty:     # true if seq is empty
+# Result — true if ok:
+let cfg = readConfig("app.toml")
+if cfg:
+  start(cfg.get())     # .get() to extract value
+
+# Other types — explicit comparison required:
+if count > 0:          # OK
+if not name.isEmpty:   # OK
+# if count:            # ERROR: use explicit comparison
+# if name:             # ERROR: use 'not name.isEmpty'
 ```
 
-`else:` on expressions follows the same rule — enters else only on none or error:
+Falsy values: `false`, `none`, `error`. Everything else is true.
+No automatic unwrapping — use `.get()` to extract the value.
+
+`else:` on expressions follows the same rule — enters else on none or error:
 
 ```
 let data = fetch(url) else:
