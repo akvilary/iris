@@ -17,7 +17,7 @@ with Rust-level memory safety. "Safe Nim."
 - No semicolons
 - No curly braces for blocks
 - Naming convention: pascalCase
-- Explicit return values: `result` in functions, `handle.result` in blocks
+- Explicit return values: `result` in functions and blocks (belongs to nearest scope)
 - No mandatory `main` function — top-level code runs directly
 
 ## Entry Point
@@ -47,7 +47,7 @@ when isMain:
 
 ## Loops
 
-Only `while` and `for`. No `loop`. Named loops via `as`:
+Only `while` and `for`. No `loop`. Named loops via `@label`:
 
 ```
 # while
@@ -64,15 +64,15 @@ for i in 0..10:
 for i in 0..<10:
   echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
-# Named loops via as — for break/continue targeting a specific loop
-while true as outer:
-  for item in myCollection as inner:
+# Named loops via @label — for break/continue targeting a specific loop
+while true @outer:
+  for item in myCollection @inner:
     if item.id == 3:
-      continue outer     # skip to next while iteration
+      continue @outer     # skip to next while iteration
     if item.id == 99:
-      break outer        # exit while entirely
+      break @outer        # exit while entirely
     if item.id < 0:
-      continue inner     # skip to next for iteration
+      continue @inner     # skip to next for iteration
 ```
 
 ## Expressions
@@ -420,12 +420,12 @@ fn mergeGraphs(src: Pool, dst: Pool) -> Node:
 # Fixed array — stack
 let fixed: array[int, 5] = [1, 2, 3, 4, 5]
 
-# Dynamic sequence — heap, created with @[...]
-var dynamic = @[1, 2, 3]
+# Dynamic sequence — heap, created with ~[...]
+var dynamic = ~[1, 2, 3]
 dynamic.add(4)
 
 # Explicit type annotation also works
-var other: seq[int] = @[10, 20, 30]
+var other: seq[int] = ~[10, 20, 30]
 
 # Empty seq
 var empty = seq[int]()
@@ -813,36 +813,36 @@ Behavior is determined by contents, not by different keywords.
 
 ```
 # Exit from nested loops
-block search:
+block @search:
   for item in list1:
     for item2 in list2:
       if item == item2:
-        break search         # exit both loops
+        break @search         # exit both loops
   echo("not found")
 
 # Nested named blocks
-block outer:
+block @outer:
   for i in 0..100:
-    block inner:
+    block @inner:
       if i == 50:
-        break outer          # exit everything
+        break @outer          # exit everything
       if i % 2 == 0:
-        break inner          # skip this block
+        break @inner          # skip this block
       process(i)
 ```
 
 ### Block as expression (returns a value)
 
 ```
-let count = block b:
+let count = block @b:
   if users.isEmpty:
-    b.result = 0
-    break b
-  b.result = users.len
+    result = 0
+    break @b
+  result = users.len
 
 # Or simpler:
-let status = block b:
-  b.result = if isReady: "ok" else: "waiting"
+let status = block @b:
+  result = if isReady: "ok" else: "waiting"
 ```
 
 ### Thread Safety
@@ -851,30 +851,30 @@ Data races are impossible — prevented at compile time by the borrow checker.
 If data is passed to a `spawn`, no other spawn can access it mutably.
 
 ```
-var data = @[1, 2, 3]
+var data = ~[1, 2, 3]
 
 # COMPILE ERROR — two spawns cannot mutate the same data:
-block b:
-  b.spawn:
+block @b:
+  spawn:
     data.add(4)          # ERROR: mutable borrow conflict
-  b.spawn:
+  spawn:
     data.add(5)          # ERROR: data already borrowed
 
 # OK — communicate via channels instead of shared memory:
 let ch = channel[int](2)
-block b:
-  b.spawn:
+block @b:
+  spawn:
     ch.send(4)
-  b.spawn:
+  spawn:
     ch.send(5)
 
 # OK — each spawn gets its own data:
-block b:
-  b.spawn:
-    var local = @[1, 2]
+block @b:
+  spawn:
+    var local = ~[1, 2]
     local.add(3)
-  b.spawn:
-    var local = @[4, 5]
+  spawn:
+    var local = ~[4, 5]
     local.add(6)
 ```
 
@@ -887,48 +887,48 @@ block b:
 ### Structured Concurrency
 
 ```
-block workers:
-  workers.spawn: fetch("url1")
-  workers.spawn: fetch("url2")
+block @workers:
+  spawn: fetch("url1")
+  spawn: fetch("url2")
 # <- all tasks guaranteed to be complete
 
 # spawn is available via block handle
-block pipeline:
+block @pipeline:
   let ch = channel[string](10)
 
-  for url in urls:
-    pipeline.spawn:
+  for url in urls @urls:
+    spawn:
       let data = fetch(url) else:
-        break
+        break @urls
       ch.send(data)
 
   for _ in urls:
-    block recv:
+    block @recv:
       spawn:
         let val = ch.receive()
         if val:
           process(val.get())
-          break recv
+          break @recv
       spawn:
         after(10.sec)
-        break pipeline       # timeout — exit everything
+        break @pipeline       # timeout — exit everything
 ```
 
 ### Nested blocks for pipeline
 
 ```
-block pipeline:
+block @pipeline:
   let raw = channel[bytes](100)
   let parsed = channel[Record](100)
 
-  block producers:
+  block @producers:
     for url in urls:
-      producers.spawn:
+      spawn:
         raw.send(fetch(url))
 
-  block consumers:
+  block @consumers:
     for _ in urls:
-      consumers.spawn:
+      spawn:
         let data = raw.recv()
         parsed.send(parse(data))
   # producers done -> consumers done -> pipeline done
@@ -966,7 +966,7 @@ let val = ch.receive()      # blocks until value available
 
 # Ownership transfer — sender loses access:
 let ch = channel[seq[int]](1)
-var data = @[1, 2, 3]
+var data = ~[1, 2, 3]
 ch.send(data)           # data MOVED into channel
 # echo(data)            # ERROR: data was moved
 
@@ -988,21 +988,21 @@ block:
 # <- all three complete
 
 # First to complete wins (like doOne/select) — break on success:
-block race:
+block @race:
   spawn:
     let val = ch1.receive()
     if val:
       process(val.get())
-      break race
+      break @race
   spawn:
     let val = ch2.receive()
     if val:
       process(val.get())
-      break race
+      break @race
   spawn:
     after(5.sec)
     echo("Timeout!")
-    break race
+    break @race
 ```
 
 ### No Colored Functions (no async/await)
@@ -1025,23 +1025,23 @@ fn process() !NetError:
   echo(data)
 ```
 
-Concurrency is achieved via `block.spawn`, not async/await:
+Concurrency is achieved via `block spawn`, not async/await:
 
 ```
 # Sequential — regular call:
 let a = fetch("url1")?
 let b = fetch("url2")?
 
-# Parallel — block.spawn:
+# Parallel — block spawn:
 var a: bytes
 var b: bytes
-block w:
-  w.spawn: a = fetch("url1")?
-  w.spawn: b = fetch("url2")?
+block @w:
+  spawn: a = fetch("url1")?
+  spawn: b = fetch("url2")?
 # <- both complete, a and b available
 ```
 
-The compiler automatically detects IO operations inside `block.spawn`
+The compiler automatically detects IO operations inside `block spawn`
 and compiles them as non-blocking. The programmer doesn't think about it.
 
 ## Error Handling
