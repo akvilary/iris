@@ -16,6 +16,32 @@ with Rust-level memory safety. "Safe Nim."
 - No curly braces for blocks
 - Naming convention: pascalCase
 - Explicit return values: `result` in functions, `handle.result` in blocks
+- No mandatory `main` function — top-level code runs directly
+
+## Entry Point
+
+Top-level code executes directly, no `main` required:
+
+```
+# hello.sl — just runs
+echo("hello world")
+
+let x = 42
+echo($x)
+```
+
+For libraries — `when isMain:` to run code only when file is executed directly
+(not when imported):
+
+```
+# myLib.sl
+fn helper*(x: int) -> int:
+    result = x + 1
+
+when isMain:
+    echo("testing myLib")
+    echo(helper(5))
+```
 
 ## Loops
 
