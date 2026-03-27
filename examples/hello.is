@@ -1,0 +1,20 @@
+# Hello World in Iris
+echo("hello world")
+
+let name = "Alice"
+let age = 30
+echo("Hello, {name}!")
+
+if age > 18:
+  echo("adult")
+else:
+  echo("minor")
+
+for i in 0..<10:
+  echo(i)
+
+fn add*(a: int, b: int) -> int:
+  result = a + b
+
+let sum = add(10, 20)
+echo(sum)
