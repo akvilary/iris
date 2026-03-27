@@ -353,6 +353,36 @@ fn process():
 No lifetime annotations. No manual memory management.
 Compiler tracks scopes and verifies borrows automatically.
 
+#### Lifetime inference rules
+
+No annotations needed. Compiler applies simple rules:
+
+1. **Returns owned value** — no lifetime concern (90% of code)
+2. **One borrow param, returns borrow** — result tied to that param
+3. **Multiple borrow params, returns borrow** — result tied to ALL params (conservative)
+
+```
+# Rule 1 — owned return, no concern:
+fn length(s: string) -> int:
+  result = s.len
+
+# Rule 2 — one borrow param, obvious:
+fn firstWord(s: string) -> string:
+  result = s.split(" ")[0]       # tied to s
+
+# Rule 3 — multiple borrows, tied to all:
+fn longest(x: string, y: string) -> string:
+  result = if x.len > y.len: x else: y
+  # compiler: result tied to both x AND y
+
+let a = "hello"
+let b = "world"
+let long = longest(a, b)        # OK: a, b, long same scope
+```
+
+No function body analysis needed. Fast compilation. Separate module compilation.
+May reject rare valid code — but never allows a bug.
+
 ### Cyclic References (Pool)
 
 The only case where you need explicit memory management:
@@ -1072,8 +1102,10 @@ block @w:
 # <- both complete, a and b available
 ```
 
-The compiler automatically detects IO operations inside `block spawn`
-and compiles them as non-blocking. The programmer doesn't think about it.
+Each `spawn` body is compiled as a separate function and executed in a thread pool
+(number of threads = number of CPU cores). Thousands of spawns can be queued.
+Blocking IO inside spawn blocks only that pool thread, not the program.
+No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
