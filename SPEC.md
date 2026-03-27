@@ -271,25 +271,25 @@ If not — they are independent and live in separate blocks.
 ```
 # Caller owns the block, function receives the handle
 block pool:
-    buildGraph(pool)
-    traverse(pool.root)
+    let root = buildGraph(pool)   # function returns a reference
+    traverse(root)
 # <- everything freed
 
-fn buildGraph(pool: Block):
+fn buildGraph(pool: Block) -> Node:
     let a = pool.alloc(Node("A"))
     let b = pool.alloc(Node("B"))
     a.link(b)
     b.link(a)
-    pool.root = a
+    result = a                     # return reference to root
 
 # Two independent graphs — two separate blocks
 block userPool:
-    buildUserGraph(userPool)
-    processUsers(userPool.root)
+    let users = buildUserGraph(userPool)
+    processUsers(users)
 
 block rolePool:
-    buildRoleGraph(rolePool)
-    processRoles(rolePool.root)
+    let roles = buildRoleGraph(rolePool)
+    processRoles(roles)
 ```
 
 ## Collections
