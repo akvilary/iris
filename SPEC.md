@@ -1139,8 +1139,9 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-A function with `| !ErrorType` in its signature returns a result union.
+`T | !E` is syntactic sugar that generates `Result[T, E]` under the hood.
 `T | !E` syntax works everywhere — signatures, parameters, type aliases.
+The programmer never writes `Result[T, E]` directly.
 `result` sets the success value. Errors are returned via `raise`.
 
 ### Returning errors from a function (function author)
@@ -1180,7 +1181,7 @@ case cfg:
   of error(IoError.notFound):
     createDefault()
   of error:
-    quit(cfg)
+    quit(cfg.getError())
 ```
 
 Exhaustiveness checking — compiler guarantees all variants are handled.
