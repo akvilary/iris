@@ -159,13 +159,13 @@ export myLib.internal.parser
 ## Functions
 
 ```
-fn funcName*(param1: Type1, param2: Type2) -> ReturnType !ErrorType:
+fn funcName*(param1: Type1, param2: Type2) -> ReturnType | !ErrorType:
   ...
 ```
 
 - `*` after name = public
-- `!ErrorType` = function can return an error (expands to Result)
-- Multiple error types: `-> ReturnType !ErrA | ErrB`
+- `| !ErrorType` = function can return an error (expands to Result)
+- Multiple error types: `-> ReturnType | !ErrA | !ErrB`
 - `?` operator for error propagation
 
 ### Return Values
@@ -177,7 +177,7 @@ Return value is set explicitly:
 fn add*(a: int, b: int) -> int:
   result = a + b
 
-fn findUser*(id: int) -> User !NotFoundError:
+fn findUser*(id: int) -> User | !NotFoundError:
   let user = db.query(id)?
   result = user
 
@@ -246,7 +246,7 @@ fn normalize(own var data: slice[byte]) -> slice[byte]:  # own + mutate
 #### Regular code — just write code, everything is automatic
 
 ```
-fn handle(request: Request) -> Response !Error:
+fn handle(request: Request) -> Response | !Error:
   let user = db.getUser(request.userId)?
   let posts = db.getPosts(user.id)?
   result = Response.new(user, posts)
@@ -874,7 +874,7 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-fn fetch(url: string) -> bytes !NetError:
+fn fetch(url: string) -> bytes | !NetError:
   let resp = http.get(url)?
   result = resp.body()
 
@@ -905,18 +905,18 @@ and compiles them as non-blocking. The programmer doesn't think about it.
 
 ## Error Handling
 
-A function with `!ErrorType` in its signature returns a Result under the hood.
+A function with `| !ErrorType` in its signature returns a Result under the hood.
 `result` sets the success value. Errors are returned via `raise`.
 
 ### Returning errors from a function (function author)
 
 ```
-fn readConfig*(path: string) -> Config !IoError | ParseError:
+fn readConfig*(path: string) -> Config | !IoError | !ParseError:
   let raw = fs.read(path)?           # ? propagates IoError up
   let parsed = json.parse(raw)?      # ? propagates ParseError up
   result = Config.from(parsed)
 
-fn divide*(a: int, b: int) -> int !MathError:
+fn divide*(a: int, b: int) -> int | !MathError:
   if b == 0:
     raise MathError.divByZero      # explicit error return
   result = a / b
@@ -930,7 +930,7 @@ fn divide*(a: int, b: int) -> int !MathError:
 #### 1. `?` — propagate up (if the calling function also returns an error)
 
 ```
-fn loadApp*() -> App !IoError | ParseError:
+fn loadApp*() -> App | !IoError | !ParseError:
   let cfg = readConfig("app.toml")?   # error propagated
   result = App.new(cfg)
 ```
