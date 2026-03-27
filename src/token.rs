@@ -7,6 +7,10 @@ pub enum TokenKind {
     StringLit(String),
     RuneLit(char),
     BoolLit(bool),
+    StringInterpStart,    // beginning of interpolated string "...{
+    StringInterpPart(String), // middle part }...{
+    StringInterpEnd(String),  // end part }..."
+
 
     // Identifiers and keywords
     Ident(String),

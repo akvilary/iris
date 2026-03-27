@@ -1,0 +1,52 @@
+# Iris language demo
+
+# Variables
+const maxAge = 120
+let greeting = "Welcome to Iris!"
+var counter = 0
+
+echo(greeting)
+
+# Functions
+fn factorial*(n: int) -> int:
+  if n <= 1:
+    result = 1
+    return
+  result = n * factorial(n - 1)
+
+fn fib*(n: int) -> int:
+  if n <= 0:
+    result = 0
+    return
+  if n == 1:
+    result = 1
+    return
+  result = fib(n - 1) + fib(n - 2)
+
+# Loops and ranges
+echo("Factorials:")
+for i in 1..10:
+  let f = factorial(i)
+  echo(f)
+
+echo("Fibonacci:")
+for i in 0..<10:
+  echo(fib(i))
+
+# Counter with while
+while counter < 5:
+  counter = counter + 1
+echo(counter)
+
+# Nested if
+fn classify*(n: int) -> int:
+  if n > 0:
+    result = 1
+  elif n < 0:
+    result = -1
+  else:
+    result = 0
+
+echo(classify(42))
+echo(classify(-7))
+echo(classify(0))

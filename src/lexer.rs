@@ -98,32 +98,82 @@ impl Lexer {
         }
     }
 
-    fn read_string(&mut self) -> Token {
+    fn read_string(&mut self) -> Vec<Token> {
         let start_line = self.line;
         let start_col = self.col;
         self.advance(); // skip opening "
 
-        let mut result = String::new();
+        let mut current = String::new();
+        let mut tokens = Vec::new();
+        let mut has_interp = false;
 
         while let Some(ch) = self.peek() {
             match ch {
                 '"' => {
                     self.advance();
-                    return Token::new(
-                        TokenKind::StringLit(result),
-                        start_line,
-                        start_col,
-                    );
+                    if has_interp {
+                        tokens.push(Token::new(
+                            TokenKind::StringInterpEnd(current),
+                            self.line,
+                            self.col,
+                        ));
+                    } else {
+                        tokens.push(Token::new(
+                            TokenKind::StringLit(current),
+                            start_line,
+                            start_col,
+                        ));
+                    }
+                    return tokens;
+                }
+                '{' => {
+                    self.advance();
+                    if !has_interp {
+                        has_interp = true;
+                        tokens.push(Token::new(
+                            TokenKind::StringInterpStart,
+                            start_line,
+                            start_col,
+                        ));
+                    }
+                    tokens.push(Token::new(
+                        TokenKind::StringLit(current.clone()),
+                        self.line,
+                        self.col,
+                    ));
+                    current.clear();
+
+                    // Read expression tokens until }
+                    let mut depth = 1;
+                    let mut expr_str = String::new();
+                    while let Some(c) = self.peek() {
+                        if c == '}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                self.advance();
+                                break;
+                            }
+                        } else if c == '{' {
+                            depth += 1;
+                        }
+                        expr_str.push(c);
+                        self.advance();
+                    }
+                    tokens.push(Token::new(
+                        TokenKind::Ident(expr_str),
+                        self.line,
+                        self.col,
+                    ));
                 }
                 '\\' => {
                     self.advance();
                     match self.peek() {
-                        Some('n') => { self.advance(); result.push('\n'); }
-                        Some('t') => { self.advance(); result.push('\t'); }
-                        Some('\\') => { self.advance(); result.push('\\'); }
-                        Some('"') => { self.advance(); result.push('"'); }
-                        Some('{') => { self.advance(); result.push('{'); }
-                        _ => result.push('\\'),
+                        Some('n') => { self.advance(); current.push('\n'); }
+                        Some('t') => { self.advance(); current.push('\t'); }
+                        Some('\\') => { self.advance(); current.push('\\'); }
+                        Some('"') => { self.advance(); current.push('"'); }
+                        Some('{') => { self.advance(); current.push('{'); }
+                        _ => current.push('\\'),
                     }
                 }
                 '\n' => {
@@ -131,16 +181,17 @@ impl Lexer {
                 }
                 _ => {
                     self.advance();
-                    result.push(ch);
+                    current.push(ch);
                 }
             }
         }
 
-        Token::new(
-            TokenKind::StringLit(result),
+        tokens.push(Token::new(
+            TokenKind::StringLit(current),
             start_line,
             start_col,
-        )
+        ));
+        tokens
     }
 
     fn read_rune(&mut self) -> Token {
@@ -288,7 +339,7 @@ impl Lexer {
                     self.skip_comment();
                 }
                 '"' => {
-                    tokens.push(self.read_string());
+                    tokens.extend(self.read_string());
                 }
                 '\'' => {
                     tokens.push(self.read_rune());

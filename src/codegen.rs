@@ -1,10 +1,12 @@
 use crate::ast::*;
+use std::collections::HashMap;
 
 pub struct CodeGen {
     output: String,
     indent: usize,
     fn_declarations: Vec<String>,
     fn_definitions: Vec<String>,
+    var_types: HashMap<String, String>,
 }
 
 impl CodeGen {
@@ -14,6 +16,7 @@ impl CodeGen {
             indent: 0,
             fn_declarations: Vec::new(),
             fn_definitions: Vec::new(),
+            var_types: HashMap::new(),
         }
     }
 
@@ -132,31 +135,37 @@ impl CodeGen {
         match stmt {
             Stmt::LetDecl { name, type_ann, value } => {
                 self.emit_indent();
-                if let Some(t) = type_ann {
-                    self.emit(&format!("{} {} = ", self.type_to_c(t), name));
+                let c_type = if let Some(t) = type_ann {
+                    self.type_to_c(t)
                 } else if let Some(val) = value {
-                    let c_type = self.infer_c_type(val);
-                    self.emit(&format!("{} {} = ", c_type, name));
+                    self.infer_c_type(val)
                 } else {
-                    self.emit(&format!("void* {} = NULL", name));
-                }
+                    "void*".to_string()
+                };
+                self.var_types.insert(name.clone(), c_type.clone());
+                self.emit(&format!("{} {} = ", c_type, name));
                 if let Some(val) = value {
                     self.gen_expr(val);
+                } else {
+                    self.emit("0");
                 }
                 self.emit(";\n");
             }
             Stmt::VarDecl { name, type_ann, value } => {
                 self.emit_indent();
-                if let Some(t) = type_ann {
-                    self.emit(&format!("{} {} = ", self.type_to_c(t), name));
+                let c_type = if let Some(t) = type_ann {
+                    self.type_to_c(t)
                 } else if let Some(val) = value {
-                    let c_type = self.infer_c_type(val);
-                    self.emit(&format!("{} {} = ", c_type, name));
+                    self.infer_c_type(val)
                 } else {
-                    self.emit(&format!("void* {}", name));
-                }
+                    "int64_t".to_string()
+                };
+                self.var_types.insert(name.clone(), c_type.clone());
+                self.emit(&format!("{} {} = ", c_type, name));
                 if let Some(val) = value {
                     self.gen_expr(val);
+                } else {
+                    self.emit("0");
                 }
                 self.emit(";\n");
             }
@@ -401,6 +410,9 @@ impl CodeGen {
                 }
                 self.emit("}");
             }
+            Expr::StringInterp { parts } => {
+                self.gen_string_interp(parts);
+            }
             Expr::SeqLit(elems) => {
                 self.emit("/* seq */ {");
                 for (i, e) in elems.iter().enumerate() {
@@ -424,16 +436,43 @@ impl CodeGen {
         let arg = &args[0].value;
         match arg {
             Expr::StringLit(s) => {
-                // Handle string interpolation: replace {expr} with %s/%d etc.
-                // For now, simple printf
-                self.emit(&format!("printf(\"%s\\n\", \"{}\")", s.replace('"', "\\\"")));
+                self.emit(&format!("printf(\"%s\\n\", \"{}\")", s.replace('\n', "\\n").replace('"', "\\\"")));
+            }
+            Expr::StringInterp { parts } => {
+                let mut fmt = String::new();
+                let mut format_args = Vec::new();
+                for part in parts {
+                    match part {
+                        StringPart::Lit(s) => {
+                            fmt.push_str(&s.replace('\n', "\\n").replace('"', "\\\""));
+                        }
+                        StringPart::Expr(e) => {
+                            // Use %s for string-like, %lld for numeric
+                            fmt.push_str("%s");
+                            format_args.push(e);
+                        }
+                    }
+                }
+                fmt.push_str("\\n");
+                self.emit(&format!("printf(\"{}\"", fmt));
+                for e in &format_args {
+                    self.emit(", ");
+                    self.gen_expr(e);
+                }
+                self.emit(")");
             }
             Expr::IntLit(n) => {
                 self.emit(&format!("printf(\"%lld\\n\", (long long){})", n));
             }
             Expr::Ident(name) => {
-                // Guess format based on name context — simplified
-                self.emit(&format!("printf(\"%lld\\n\", (long long){})", name));
+                let is_string = self.var_types.get(name)
+                    .map(|t| t == "const char*")
+                    .unwrap_or(false);
+                if is_string {
+                    self.emit(&format!("printf(\"%s\\n\", {})", name));
+                } else {
+                    self.emit(&format!("printf(\"%lld\\n\", (long long){})", name));
+                }
             }
             _ => {
                 self.emit("printf(\"%lld\\n\", (long long)");
@@ -441,6 +480,26 @@ impl CodeGen {
                 self.emit(")");
             }
         }
+    }
+
+    fn gen_string_interp(&mut self, parts: &[StringPart]) {
+        // Generate as printf-style
+        let mut fmt = String::new();
+        let mut exprs: Vec<&Expr> = Vec::new();
+        for part in parts {
+            match part {
+                StringPart::Lit(s) => {
+                    fmt.push_str(&s.replace('"', "\\\""));
+                }
+                StringPart::Expr(e) => {
+                    fmt.push_str("%lld");
+                    exprs.push(e);
+                }
+            }
+        }
+        self.emit("/* interp */ \"");
+        self.emit(&fmt);
+        self.emit("\"");
     }
 
     fn infer_c_type(&self, expr: &Expr) -> String {

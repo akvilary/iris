@@ -603,6 +603,33 @@ impl Parser {
                 self.advance();
                 Expr::StringLit(val)
             }
+            TokenKind::StringInterpStart => {
+                self.advance(); // skip InterpStart
+                let mut parts = Vec::new();
+                loop {
+                    match self.peek().clone() {
+                        TokenKind::StringLit(s) => {
+                            if !s.is_empty() {
+                                parts.push(StringPart::Lit(s.clone()));
+                            }
+                            self.advance();
+                        }
+                        TokenKind::Ident(name) => {
+                            parts.push(StringPart::Expr(Expr::Ident(name.clone())));
+                            self.advance();
+                        }
+                        TokenKind::StringInterpEnd(s) => {
+                            if !s.is_empty() {
+                                parts.push(StringPart::Lit(s.clone()));
+                            }
+                            self.advance();
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                Expr::StringInterp { parts }
+            }
             TokenKind::RuneLit(c) => {
                 let val = c;
                 self.advance();
