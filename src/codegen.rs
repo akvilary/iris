@@ -359,64 +359,66 @@ impl CodeGen {
         self.emit("typedef struct {\n");
         self.indent += 1;
         for f in fields {
-            self.emit_line(&format!("{} {};", self.type_to_c(&f.type_ann), f.name));
+            let c_type = self.type_to_c(&f.type_ann);
+            self.emit_line(&format!("{} {};", c_type, f.name));
         }
         self.indent -= 1;
-        self.emit_line(&format!("}} {};", name));
+        self.emit(&format!("}} {};\n", name));
     }
 
     fn gen_enum_decl(&mut self, name: &str, variants: &[EnumVariant]) {
-        // Check if simple enum (no data) or ADT
-        let is_simple = variants.iter().all(|v| {
-            matches!(v.value, None | Some(EnumValue::Int(_)) | Some(EnumValue::String(_)))
-        });
-
         self.enum_names.push(name.to_string());
 
-        if is_simple {
-            self.emit("typedef enum {\n");
-            self.indent += 1;
-            for (i, v) in variants.iter().enumerate() {
-                self.emit_indent();
-                self.emit(&format!("{}_{}", name, v.name));
-                if let Some(EnumValue::Int(n)) = &v.value {
-                    self.emit(&format!(" = {}", n));
-                }
-                if i < variants.len() - 1 { self.emit(","); }
-                self.emit("\n");
-            }
-            self.indent -= 1;
-            self.emit_line(&format!("}} {};", name));
-
-            // String value lookup for $ operator
-            let has_strings = variants.iter().any(|v| matches!(v.value, Some(EnumValue::String(_))));
-            if has_strings {
-                self.emit(&format!("const char* {}_to_string({} v) {{\n", name, name));
-                self.indent += 1;
-                self.emit_line(&format!("switch (v) {{"));
-                self.indent += 1;
-                for v in variants {
-                    let s = match &v.value {
-                        Some(EnumValue::String(s)) => s.clone(),
-                        _ => v.name.clone(),
-                    };
-                    self.emit_line(&format!("case {}_{}: return \"{}\";", name, v.name, s));
-                }
-                self.emit_line("default: return \"unknown\";");
-                self.indent -= 1;
-                self.emit_line("}");
-                self.indent -= 1;
-                self.emit("}\n\n");
-            }
-        } else {
-            // ADT — tagged union
-            self.emit_line(&format!("typedef enum {{ /* {} tags */ }} {}_Tag;", name, name));
-            self.emit_line(&format!("/* ADT {} not fully implemented */", name));
+        let has_data = variants.iter().any(|v| matches!(v.value, Some(EnumValue::Fields(_))));
+        if has_data {
+            self.emit_line(&format!("/* ADT {} — not yet implemented */", name));
+            return;
         }
+
+        self.gen_simple_enum(name, variants);
+        self.gen_enum_to_string(name, variants);
+    }
+
+    fn gen_simple_enum(&mut self, name: &str, variants: &[EnumVariant]) {
+        self.emit("typedef enum {\n");
+        self.indent += 1;
+        let last = variants.len().saturating_sub(1);
+        for (i, v) in variants.iter().enumerate() {
+            self.emit_indent();
+            self.emit(&format!("{}_{}", name, v.name));
+            if let Some(EnumValue::Int(n)) = &v.value {
+                self.emit(&format!(" = {}", n));
+            }
+            if i < last { self.emit(","); }
+            self.emit("\n");
+        }
+        self.indent -= 1;
+        self.emit(&format!("}} {};\n", name));
+    }
+
+    fn gen_enum_to_string(&mut self, name: &str, variants: &[EnumVariant]) {
+        let has_strings = variants.iter().any(|v| matches!(v.value, Some(EnumValue::String(_))));
+        if !has_strings { return; }
+
+        self.emit(&format!("const char* {}_to_string({} v) {{\n", name, name));
+        self.indent += 1;
+        self.emit_line("switch (v) {");
+        self.indent += 1;
+        for v in variants {
+            let display = match &v.value {
+                Some(EnumValue::String(s)) => s.as_str(),
+                _ => &v.name,
+            };
+            self.emit_line(&format!("case {}_{}: return \"{}\";", name, v.name, display));
+        }
+        self.emit_line("default: return \"unknown\";");
+        self.indent -= 1;
+        self.emit_line("}");
+        self.indent -= 1;
+        self.emit("}\n");
     }
 
     fn gen_case(&mut self, expr: &Expr, branches: &[CaseBranch], else_body: &Option<Vec<Stmt>>) {
-        // For simple enums, generate switch
         self.emit_indent();
         self.emit("switch (");
         self.gen_expr(expr);
@@ -424,15 +426,7 @@ impl CodeGen {
         self.indent += 1;
 
         for branch in branches {
-            match &branch.pattern {
-                CasePattern::Variant(name) => {
-                    self.emit_line(&format!("case {}:", name));
-                }
-                CasePattern::Ok => self.emit_line("case 1: /* ok */"),
-                CasePattern::Error(_) => self.emit_line("case 0: /* error */"),
-                CasePattern::Some => self.emit_line("case 1: /* some */"),
-                CasePattern::None => self.emit_line("case 0: /* none */"),
-            }
+            self.gen_case_label(&branch.pattern);
             self.indent += 1;
             for s in &branch.body { self.gen_stmt(s); }
             self.emit_line("break;");
@@ -449,6 +443,18 @@ impl CodeGen {
 
         self.indent -= 1;
         self.emit_line("}");
+    }
+
+    fn gen_case_label(&mut self, pattern: &CasePattern) {
+        match pattern {
+            CasePattern::Variant(name) => {
+                // Color.red → Color_red in C
+                let c_name = name.replace('.', "_");
+                self.emit_line(&format!("case {}:", c_name));
+            }
+            // Ok/Error/Some/None require runtime type info — not yet implemented
+            _ => self.emit_line("/* pattern not yet implemented */"),
+        }
     }
 
     // ── Expression codegen ──
@@ -512,6 +518,13 @@ impl CodeGen {
                 self.emit(")");
             }
             Expr::FieldAccess { expr, field } => {
+                // Enum access: Color.red → Color_red in C
+                if let Expr::Ident(name) = expr.as_ref() {
+                    if self.enum_names.contains(name) {
+                        self.emit(&format!("{}_{}", name, field));
+                        return;
+                    }
+                }
                 self.gen_expr(expr);
                 self.emit(".");
                 self.emit(field);
@@ -626,13 +639,16 @@ impl CodeGen {
                 }
                 "int64_t"
             }
-            Expr::Ident(name) => {
-                // Detect enum values like Color_red → type is Color
-                for en in &self.enum_names {
-                    if name.starts_with(&format!("{}_", en)) {
-                        return en.clone();
+            Expr::FieldAccess { expr, .. } => {
+                // Color.red → type is Color
+                if let Expr::Ident(name) = expr.as_ref() {
+                    if self.enum_names.contains(name) {
+                        return name.clone();
                     }
                 }
+                "int64_t"
+            }
+            Expr::Ident(name) => {
                 return self.var_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
             }
             _ => "int64_t",

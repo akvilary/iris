@@ -19,14 +19,14 @@ echo(p.x)
 echo(p.y)
 
 # Use enum
-let c = Color_red
+let c = Color.red
 echo(c)
 
 # Case
 case c:
-  of Color_red:
+  of Color.red:
     echo("Red!")
-  of Color_green:
+  of Color.green:
     echo("Green!")
-  of Color_blue:
+  of Color.blue:
     echo("Blue!")
