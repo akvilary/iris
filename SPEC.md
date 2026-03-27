@@ -77,7 +77,7 @@ while true as outer:
 
 ## Expressions
 
-`if`/`elif`/`else` and `match` are expressions — they return values:
+`if`/`elif`/`else` and `case` are expressions — they return values:
 
 ```
 # Inline if:
@@ -91,11 +91,11 @@ elif code == 404:
 else:
   "error"
 
-# match as expression:
-let name = match color:
-  Color.red: "Red"
-  Color.green: "Green"
-  Color.blue: "Blue"
+# case as expression:
+let name = case color:
+  of Color.red: "Red"
+  of Color.green: "Green"
+  of Color.blue: "Blue"
 ```
 
 ## Truthiness
@@ -507,7 +507,7 @@ fn createBuffer*(size: natural) -> Buffer:
 ### Option
 
 No null/nil in Iris. `Option[T]` represents a value that may or may not exist.
-Works with `?`, `match`, and `else` — same patterns as error handling.
+Works with `?`, `case`, and `else` — same patterns as error handling.
 
 ```
 # Creating
@@ -515,9 +515,9 @@ let a = some(42)            # Option[int] with value
 let b = none(int)           # Option[int] without value
 
 # Pattern matching
-match a as val:
-  some: echo(val)               # 42
-  none: echo("nothing")
+case a as val:
+  of some: echo(val)               # 42
+  of none: echo("nothing")
 
 # else — default value
 let x = a else: 0           # 42 (has value)
@@ -634,10 +634,10 @@ enum Shape*:
   Point                        # variant without data — also OK
 
 fn area*(s: Shape) -> float:
-  result = match s:
-    Circle as c: PI * c.radius * c.radius
-    Rect as r: r.w * r.h
-    Point: 0.0
+  result = case s:
+    of Circle as c: PI * c.radius * c.radius
+    of Rect as r: r.w * r.h
+    of Point: 0.0
 ```
 
 Pattern matching with exhaustiveness checking — compiler guarantees
@@ -645,13 +645,13 @@ all variants are handled. Use `else` to catch remaining cases,
 `discard` to explicitly ignore:
 
 ```
-match direction:
-  Direction.north: goUp()
-  Direction.south: goDown()
+case direction:
+  of Direction.north: goUp()
+  of Direction.south: goDown()
 else: discard                        # explicitly ignore east, west
 ```
 
-No `_:` wildcard — use `else:` instead. `match` must always be exhaustive
+No `_:` wildcard — use `else:` instead. `case` must always be exhaustive
 (all cases handled or `else` present).
 
 ### Concepts
@@ -1055,15 +1055,15 @@ fn loadApp*() -> App | !IoError | !ParseError:
   result = newApp(cfg)
 ```
 
-#### 2. `match` — handle all cases
+#### 2. `case` — handle all cases
 
 ```
-match readConfig("app.toml") as cfg:
-  ok:
+case readConfig("app.toml") as cfg:
+  of ok:
     start(cfg)
-  error(IoError.notFound):
+  of error(IoError.notFound):
     createDefault()
-  error as e:
+  of error as e:
     quit(e)
 ```
 
