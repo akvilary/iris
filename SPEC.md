@@ -2,52 +2,79 @@
 
 ## Overview
 
-Slang — компилируемый системный язык программирования.
-Компилируется в C (позже C++, JavaScript).
-Компилятор пишется на Rust (bootstrap), затем self-hosting.
+Slang is a compiled systems programming language.
+Compiles to C (later C++, JavaScript).
+Compiler is written in Rust (bootstrap), then self-hosting.
 
 ## Syntax
 
-- Блоки через отступы (как Nim/Python)
-- Нет точек с запятой
-- Нет фигурных скобок для блоков
+- Indentation-based blocks (like Nim/Python)
+- No semicolons
+- No curly braces for blocks
 - Naming convention: pascalCase
-- Явные возвращаемые значения: `result` в функциях, `handle.result` в блоках
+- Explicit return values: `result` in functions, `handle.result` in blocks
+
+## Loops
+
+Only `while` and `for`. No `loop`. Named loops via `as`:
+
+```
+# while
+while condition:
+    doSomething()
+
+# for
+for item in collection:
+    process(item)
+
+for i in 0..10:
+    echo(i)
+
+# Named loops via as — for break/continue targeting a specific loop
+while true as outer:
+    for item in myCollection as inner:
+        if item.id == 3:
+            continue outer     # skip to next while iteration
+        if item.id == 99:
+            break outer        # exit while entirely
+        if item.id < 0:
+            continue inner     # skip to next for iteration
+```
 
 ## Variables
 
-| Ключевое слово | Значение | Пример |
-|----------------|----------|--------|
-| `const` | Вычисляется на этапе компиляции (compile-time) | `const maxSize = 1024` |
-| `let` | Неизменяемая переменная (runtime) | `let name = "Alice"` |
-| `var` | Изменяемая переменная (runtime) | `var count = 0` |
+| Keyword | Meaning | Example |
+|---------|---------|---------|
+| `const` | Evaluated at compile-time | `const maxSize = 1024` |
+| `let` | Immutable variable (runtime) | `let name = "Alice"` |
+| `var` | Mutable variable (runtime) | `var count = 0` |
 
 ```
-const pi = 3.14159265              # compile-time, встраивается в код
-const maxRetries* = 3              # compile-time, публичная
+const pi = 3.14159265              # compile-time, inlined
+const maxRetries* = 3              # compile-time, public
 
-let user = getUser(id)             # runtime, нельзя переприсвоить
-# user = otherUser                 # ОШИБКА: let нельзя изменить
+let user = getUser(id)             # runtime, cannot reassign
+# user = otherUser                 # ERROR: let cannot be reassigned
 
-var counter = 0                    # runtime, можно изменять
-counter = counter + 1              # ОК
+var counter = 0                    # runtime, mutable
+counter = counter + 1              # OK
 ```
 
 ## Visibility
 
-Публичность через `*` после имени (как в Nim):
+Public visibility via `*` after the name (like Nim):
 
 ```
-fn helperFunc(x: int) -> int:        # приватная
+fn helperFunc(x: int) -> int:        # private
     x + 1
 
-fn processData*(x: int) -> int:      # публичная
+fn processData*(x: int) -> int:      # public
     helperFunc(x)
 
 type Config*:
-    host*: string        # публичное поле
-    port*: int        # публичное поле
-    secret: string       # приватное поле
+    host*: string        # public field
+    port*: int           # public field
+    secret: string       # private field
 
 type Shape*:
     Circle(radius: float)
@@ -61,38 +88,38 @@ const maxRetries* = 3
 
 ## Module System
 
-### Import — только квалифицированный доступ
+### Import — qualified access only
 
 ```
 import net
 
-# Обязательно через имя модуля:
+# Must use module name:
 let conn = net.connect("localhost", 8080)
 
-# НЕ допускается:
-# connect("localhost", 8080)   ← ошибка компиляции
+# NOT allowed:
+# connect("localhost", 8080)   <- compile error
 ```
 
-### From import — явный импорт конкретных имён
+### From import — explicit import of specific names
 
 ```
 from net import connect, listen
 
-# Теперь можно напрямую:
+# Now available directly:
 let conn = connect("localhost", 8080)
 ```
 
-### From export — реэкспорт из вложенных модулей
+### From export — re-export from nested modules
 
 ```
-# Реэкспорт конкретных имён:
+# Re-export specific names:
 from myLib.internal.parser export parseJson, parseXml
 
-# Реэкспорт целого модуля:
+# Re-export entire module:
 export myLib.internal.parser
 
-# Пользователь myLib получает доступ к parseJson
-# без знания о внутренней структуре myLib
+# Users of myLib get access to parseJson
+# without knowing the internal structure of myLib
 ```
 
 ## Functions
@@ -102,14 +129,14 @@ fn funcName*(param1: Type1, param2: Type2) -> ReturnType !ErrorType:
     ...
 ```
 
-- `*` после имени = публичная
-- `!ErrorType` = функция может вернуть ошибку (разворачивается в Result)
-- Несколько типов ошибок: `-> ReturnType !ErrA | ErrB`
-- `?` оператор для проброса ошибок
+- `*` after name = public
+- `!ErrorType` = function can return an error (expands to Result)
+- Multiple error types: `-> ReturnType !ErrA | ErrB`
+- `?` operator for error propagation
 
 ### Return Values
 
-`result` — зарезервированное слово. Возвращаемое значение задаётся явно:
+`result` is a reserved word. Return value is set explicitly:
 
 ```
 fn add*(a: int, b: int) -> int:
@@ -119,7 +146,7 @@ fn findUser*(id: int) -> User !NotFoundError:
     let user = db.query(id)?
     result = user
 
-# result можно задать в любом месте, в т.ч. в ветвлениях:
+# result can be set anywhere, including branches:
 fn classify*(n: int) -> string:
     if n > 0:
         result = "positive"
@@ -128,33 +155,33 @@ fn classify*(n: int) -> string:
     else:
         result = "zero"
 
-# result можно задать рано и продолжить работу:
+# result can be set early and execution continues:
 fn process*(data: []byte) -> int:
     result = 0
     for b in data:
         result = result + b.toInt()
-    log("sum computed")    # выполнится после, result уже задан
+    log("sum computed")    # runs after, result already set
 
-# return — досрочный выход (использует текущее значение result):
+# return — early exit (uses current result value):
 fn search*(list: []int, target: int) -> int:
     result = -1
     for i, val in list:
         if val == target:
             result = i
-            return             # выход с текущим result
+            return             # exit with current result
 ```
 
-Компилятор проверяет, что `result` задан на всех путях выполнения.
+Compiler verifies that `result` is set on all execution paths.
 
 ## Memory Model
 
 ### Ownership + Borrow Checker
 
-По умолчанию — immutable borrow. Аннотации для других режимов:
+Default is immutable borrow. Annotations for other modes:
 
-| Аннотация | Смысл | Аналог в Rust |
-|-----------|-------|---------------|
-| *(ничего)* | Immutable borrow | `&T` |
+| Annotation | Meaning | Rust equivalent |
+|------------|---------|-----------------|
+| *(none)* | Immutable borrow | `&T` |
 | `var` | Mutable borrow | `&mut T` |
 | `own` | Take ownership (immutable) | `T` |
 | `own var` | Take ownership + mutable | `mut T` |
@@ -163,10 +190,10 @@ fn search*(list: []int, target: int) -> int:
 fn length(s: string) -> int:             # immutable borrow (default)
     s.len
 
-fn sort(var list: []int):             # mutable borrow
+fn sort(var list: []int):                # mutable borrow
     ...
 
-fn send(own msg: Message):            # take ownership
+fn send(own msg: Message):              # take ownership
     channel.push(msg)
 
 fn normalize(own var data: []byte) -> []byte:  # own + mutate
@@ -176,57 +203,57 @@ fn normalize(own var data: []byte) -> []byte:  # own + mutate
 
 ### Lifetimes
 
-Нет ручных lifetime-аннотаций. Компилятор выводит lifetimes автоматически
-и проверяет корректность на call site (аналогично duck typing для дженериков).
+No manual lifetime annotations. Compiler infers lifetimes automatically
+and verifies correctness at call site (same as duck typing for generics).
 
 ```
 fn longest(x: string, y: string) -> string:
     result = if x.len > y.len: x else: y
 
-# Компилятор на call site проверяет, что результат не переживёт x и y:
+# Compiler verifies at call site that result doesn't outlive x and y:
 let a = "hello"
 let b = "world"
-let long = longest(a, b)    # ОК: a, b, long — в одном scope
+let long = longest(a, b)    # OK: a, b, long are in the same scope
 ```
 
 ### Memory Regions (block.alloc)
 
-Region-based memory management через `block.alloc`.
-Для циклических структур и графов.
+Region-based memory management via `block.alloc`.
+For cyclic structures and graphs.
 
-#### Правила
+#### Rules
 
-1. Один Block handle на функцию — функция принимает максимум один `Block`
-2. Cross-block linking запрещён — данные из разных блоков не могут ссылаться друг на друга
-3. Данные из `block.alloc` не могут покинуть block (если нужно — `.clone()`)
-4. Если block не использует `.alloc` — аллокатор не создаётся (zero overhead)
+1. One Block handle per function — a function accepts at most one `Block`
+2. Cross-block linking is forbidden — data from different blocks cannot reference each other
+3. Data from `block.alloc` cannot leave the block (use `.clone()` if needed)
+4. If block doesn't use `.alloc` — no allocator is created (zero overhead)
 
-Обоснование: если двум структурам нужно ссылаться друг на друга,
-они по определению часть одного графа и живут в одном block.
-Если не нужно — они независимы и живут в разных блоках.
+Rationale: if two structures need to reference each other,
+they are by definition part of the same graph and live in one block.
+If not — they are independent and live in separate blocks.
 
-#### Примеры
+#### Examples
 
 ```
-# Циклические ссылки внутри одного block — ОК
+# Cyclic references within one block — OK
 block pool:
     let a = pool.alloc(Node("A"))
     let b = pool.alloc(Node("B"))
     a.link(b)
-    b.link(a)              # ОК — один регион
-# <- вся память освобождена за O(1)
+    b.link(a)              # OK — same region
+# <- all memory freed in O(1)
 
-# Данные не могут покинуть block
+# Data cannot leave the block
 block pool:
     let node = pool.alloc(Node("A"))
-    node                   # ОШИБКА: node привязан к pool
-# Если нужно вынести — явный .clone()
+    node                   # ERROR: node is bound to pool
+# Use .clone() to extract
 
-# Вызывающий код владеет block, функция принимает handle
+# Caller owns the block, function receives the handle
 block pool:
-    buildGraph(pool)       # функция аллоцирует внутри pool
-    traverse(pool.root)    # используем данные
-# <- всё освобождено
+    buildGraph(pool)       # function allocates inside pool
+    traverse(pool.root)    # use the data
+# <- everything freed
 
 fn buildGraph(pool: Block):
     let a = pool.alloc(Node("A"))
@@ -235,7 +262,7 @@ fn buildGraph(pool: Block):
     b.link(a)
     pool.root = a
 
-# Два независимых графа — два отдельных block
+# Two independent graphs — two separate blocks
 block userPool:
     buildUserGraph(userPool)
     processUsers(userPool.root)
@@ -249,115 +276,113 @@ block rolePool:
 
 ### Arrays, Sequences, Views
 
-| Синтаксис | Что это | Где живёт | Размер |
-|-----------|---------|-----------|--------|
-| `[5]int` | Фиксированный массив | Стек (inline) | Известен на компиляции |
-| `seq[int]` | Динамическая последовательность | Куча | Растёт в runtime |
-| `[]int` | View/slice (только для параметров) | Ссылка на чужие данные | Указатель + длина |
+| Syntax | What | Storage | Size |
+|--------|------|---------|------|
+| `[5]int` | Fixed-size array | Stack (inline) | Known at compile-time |
+| `seq[int]` | Dynamic sequence | Heap | Grows at runtime |
+| `[]int` | View/slice (parameters only) | Reference to existing data | Pointer + length |
 
 ```
-# Фиксированный массив — стек
+# Fixed array — stack
 let fixed: [5]int = [1, 2, 3, 4, 5]
 
-# Динамическая последовательность — куча
+# Dynamic sequence — heap
 var dynamic: seq[int] = [1, 2, 3]
 dynamic.add(4)
 
-# View — принимает и array, и seq
+# View — accepts both array and seq
 fn sum(arr: []int) -> int:
     result = 0
     for x in arr:
         result = result + x
 
-sum(fixed)      # ОК — view на стековый массив
-sum(dynamic)    # ОК — view на seq
+sum(fixed)      # OK — view into stack array
+sum(dynamic)    # OK — view into seq
 ```
-
-## Strings
 
 ## Numeric Types
 
 ```
-int         # signed, размер платформы (64-bit на современных системах)
+int         # signed, platform size (64-bit on modern systems)
 int8        # 8-bit signed
 int16       # 16-bit signed
 int32       # 32-bit signed
 int64       # 64-bit signed
-uint        # unsigned, размер платформы
-uint8       # 8-bit unsigned (он же byte)
+uint        # unsigned, platform size
+uint8       # 8-bit unsigned (a.k.a. byte)
 uint16      # 16-bit unsigned
 uint32      # 32-bit unsigned
 uint64      # 64-bit unsigned
-float       # = float64 по умолчанию
+float       # = float64 by default
 float32     # 32-bit float
 float64     # 64-bit float
-byte        # алиас для uint8
-natural     # int с ограничением >= 0, ошибка при попытке стать отрицательным
+byte        # alias for uint8
+natural     # int restricted to >= 0, error on attempt to go negative
 ```
 
-`natural` — безопасный неотрицательный тип. В отличие от `uint`,
-не оборачивается при переполнении, а вызывает ошибку:
+`natural` is a safe non-negative type. Unlike `uint`,
+it does not wrap around on overflow — it raises an error:
 
 ```
 var n: natural = 10
-n = n - 5                # ОК, n = 5
-n = n - 10               # ОШИБКА: natural не может быть отрицательным
+n = n - 5                # OK, n = 5
+n = n - 10               # ERROR: natural cannot be negative
 
-# Идеален для индексов, размеров, счётчиков
+# Ideal for indices, sizes, counters
 fn createBuffer*(size: natural) -> Buffer:
-    # size гарантированно >= 0, не нужна проверка
+    # size is guaranteed >= 0, no validation needed
     ...
 ```
 
 ## Strings
 
-- `string` — неизменяемый (immutable), как в Python
-- UTF-8 по умолчанию
-- Ownership-based, без GC и без reference counting
-- Хранение (прозрачно для программиста):
-  - Литералы `"..."` → статическая память
-  - Короткие (<=23 байт) → inline SSO (стек)
-  - Длинные (>23 байт) → куча, один владелец
-- Передача: borrow по умолчанию (zero cost)
-- `StrBuf` — мутабельный буфер для построения строк
-- Интерполяция: `"hello {name}"`
+- `string` — immutable (like Python)
+- UTF-8 by default
+- Ownership-based, no GC, no reference counting
+- Storage (transparent to programmer):
+  - Literals `"..."` → static memory
+  - Short (<=23 bytes) → inline SSO (stack)
+  - Long (>23 bytes) → heap, single owner
+- Passing: borrow by default (zero cost)
+- `StrBuf` — mutable buffer for building strings
+- Interpolation: `"hello {name}"`
 
 ```
-let name = "Alice"                    # статическая память
+let name = "Alice"                    # static memory
 let greeting = "Hello, {name}!"      # SSO
-let big = readFile("big.txt")        # куча, один владелец
+let big = readFile("big.txt")        # heap, single owner
 
-fn greet(s: string):                    # immutable borrow, zero cost
+fn greet(s: string):                  # immutable borrow, zero cost
     echo(s)
 
 let buf = StrBuf.new()
 buf.add("part1")
 buf.add("part2")
-let result = buf.toString()          # финальная immutable string
+let result = buf.toString()          # final immutable string
 ```
 
 ## Type System
 
-- Статическая типизация
-- Дженерики без явных constraints (duck typing при инстанциации, как Nim)
-  - Компилятор проверяет при вызове, не при объявлении
-  - `slang check --api-compat` для проверки breaking changes
-- Pattern matching с exhaustiveness checking
-- Concepts (compile-time duck typing с именем, как в Nim)
-- Нет null/nil — только `Option[T]`
-- Нет наследования классов — только композиция
-- Нет неявных преобразований — только явные `.into()`
-- Nominal typing (два типа с одинаковыми полями ≠ один тип)
-- Structural typing через concepts
+- Static typing
+- Generics without explicit constraints (duck typing at instantiation, like Nim)
+  - Compiler checks at call site, not at declaration
+  - `slang check --api-compat` for checking breaking changes
+- Pattern matching with exhaustiveness checking
+- Concepts (compile-time duck typing with a name, like Nim)
+- No null/nil — only `Option[T]`
+- No class inheritance — composition only
+- No implicit conversions — explicit `.into()` only
+- Nominal typing (two types with identical fields ≠ same type)
+- Structural typing via concepts
 
 ### Enum
 
-Единый keyword `enum` для простых перечислений и алгебраических типов.
-Компилятор определяет вид по наличию данных у вариантов.
+Single `enum` keyword for both simple enumerations and algebraic types.
+Compiler determines the kind based on whether variants carry data.
 
-#### Простой enum (без данных)
+#### Simple enum (no data)
 
-Поддерживает итерацию, `ord`, множества (`set`):
+Supports iteration, `ord`, sets:
 
 ```
 enum Direction*:
@@ -367,27 +392,27 @@ let d = Direction.north
 echo(d)                         # "north"
 echo(ord(d))                    # 0
 
-# Итерация по всем значениям
+# Iterate over all values
 for dir in Direction:
     echo(dir)
 
-# Множества
+# Sets
 let dirs: set[Direction] = {Direction.north, Direction.south}
 if Direction.north in dirs:
     echo("going north")
 
-# Явные числовые значения
+# Explicit numeric values
 enum Color*:
     red = 0, green = 1, blue = 2
 ```
 
-#### Enum с данными (алгебраический тип / sum type)
+#### Enum with data (algebraic type / sum type)
 
 ```
 enum Shape*:
     Circle(radius: float)
     Rect(w: float, h: float)
-    Point                        # вариант без данных — тоже ОК
+    Point                        # variant without data — also OK
 
 fn area*(s: Shape) -> float:
     result = match s:
@@ -396,13 +421,13 @@ fn area*(s: Shape) -> float:
         Point: 0.0
 ```
 
-Pattern matching с exhaustiveness checking — компилятор гарантирует,
-что все варианты обработаны.
+Pattern matching with exhaustiveness checking — compiler guarantees
+all variants are handled.
 
 ### Concepts
 
-Именованный набор требований к типу. Чисто compile-time, zero overhead.
-Не требует `impl` — если тип подходит, он автоматически удовлетворяет concept.
+Named set of requirements for a type. Purely compile-time, zero overhead.
+No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 ```
 concept Printable:
@@ -417,23 +442,23 @@ concept Serializable:
     fn fromJson(raw: string) -> Self
 ```
 
-Использование — **опционально**, для документации и лучших ошибок компилятора:
+Usage is **optional**, for documentation and better compiler errors:
 
 ```
-# С concept — лучшие сообщения об ошибках:
+# With concept — better error messages:
 fn sort[T: Comparable](var list: []T):
     ...
 # error: type Socket does not satisfy concept Comparable
 #   missing: fn lessThan(self, other: Socket) -> bool
 
-# Без concept — тоже работает, duck typing на call site:
+# Without concept — also works, duck typing at call site:
 fn sort[T](var list: []T):
     ...
 # error: type Socket has no method 'lessThan'
 #   called from sort() at main.sl:10
 ```
 
-Тип автоматически удовлетворяет concept если у него есть нужные методы:
+A type automatically satisfies a concept if it has the required methods:
 
 ```
 type User:
@@ -443,8 +468,8 @@ type User:
 fn toString(self: User) -> string:
     result = "{self.name}, {self.age}"
 
-# User автоматически удовлетворяет Printable — есть toString
-# Никакого impl, никакой регистрации
+# User automatically satisfies Printable — has toString
+# No impl, no registration needed
 ```
 
 ### Generics
@@ -453,40 +478,40 @@ fn toString(self: User) -> string:
 fn map[T, U](list: []T, f: fn(T) -> U) -> []U:
     result = [f(x) for x in list]
 
-# С concept constraint (опционально):
+# With concept constraint (optional):
 fn printAll[T: Printable](items: []T):
     for item in items:
         echo(item.toString())
 ```
 
-## Block — универсальная конструкция
+## Block — universal construct
 
-`block` — единый building block для control flow, concurrency, scoping и значений.
-Поведение определяется содержимым, а не разными ключевыми словами.
+`block` is the single building block for control flow, concurrency, scoping, and values.
+Behavior is determined by contents, not by different keywords.
 
-### Control Flow — именованные блоки и break
+### Control Flow — named blocks and break
 
 ```
-# Выход из вложенных циклов
+# Exit from nested loops
 block search:
     for item in list1:
         for item2 in list2:
             if item == item2:
-                break search         # выход из обоих циклов
+                break search         # exit both loops
     echo("not found")
 
-# Вложенные именованные блоки
+# Nested named blocks
 block outer:
     for i in 0..100:
         block inner:
             if i == 50:
-                break outer          # выход из всего
+                break outer          # exit everything
             if i % 2 == 0:
-                break inner          # пропуск этого блока
+                break inner          # skip this block
             process(i)
 ```
 
-### Block как выражение (возвращает значение)
+### Block as expression (returns a value)
 
 ```
 let count = block b:
@@ -495,7 +520,7 @@ let count = block b:
         break b
     b.result = users.len
 
-# Или проще:
+# Or simpler:
 let status = block b:
     b.result = if isReady: "ok" else: "waiting"
 ```
@@ -506,9 +531,9 @@ let status = block b:
 block workers:
     workers.spawn: fetch("url1")
     workers.spawn: fetch("url2")
-# <- все задачи гарантированно завершены
+# <- all tasks guaranteed to be complete
 
-# spawn доступен через handle блока
+# spawn is available via block handle
 block pipeline:
     let ch = channel[string](10)
 
@@ -523,10 +548,10 @@ block pipeline:
             val from ch:
                 process(val)
             after 10.sec:
-                break pipeline       # таймаут — выходим из всего
+                break pipeline       # timeout — exit everything
 ```
 
-### Вложенные блоки для pipeline
+### Nested blocks for pipeline
 
 ```
 block pipeline:
@@ -543,7 +568,7 @@ block pipeline:
             consumers.spawn:
                 let data = raw.recv()
                 parsed.send(parse(data))
-    # producers закончились -> consumers закончились -> pipeline закончился
+    # producers done -> consumers done -> pipeline done
 ```
 
 ### Memory Regions (block.alloc)
@@ -553,34 +578,34 @@ block pool:
     let a = pool.alloc(Node("A"))
     let b = pool.alloc(Node("B"))
     a.link(b)
-    b.link(a)                    # цикл — ОК, один регион
-# <- вся память освобождена за O(1)
+    b.link(a)                    # cycle — OK, same region
+# <- all memory freed in O(1)
 
-# Данные не могут покинуть block:
+# Data cannot leave the block:
 block pool:
     let node = pool.alloc(Node("A"))
-    node                         # ОШИБКА: node привязан к pool
+    node                         # ERROR: node is bound to pool
 
-# Комбинация с concurrency:
+# Combined with concurrency:
 block ctx:
     let graph = ctx.alloc(Graph.new())
     ctx.spawn: traverse(graph)
     ctx.spawn: validate(graph)
-# <- задачи завершены, память освобождена
+# <- tasks complete, memory freed
 
-# Без .alloc — обычный block, zero overhead
+# Without .alloc — regular block, zero overhead
 ```
 
-### detach — для long-lived задач (вне block)
+### detach — for long-lived tasks (outside block)
 
-`detach` — антипод `block`. Запускает задачу, живущую независимо от текущего scope.
+`detach` is the opposite of `block`. Launches a task that lives independently of the current scope.
 
 ```
-# Для демонов/серверов — явный unstructured spawn (редко)
+# For daemons/servers — explicit unstructured spawn (rare)
 let server = detach:
     listen(8080)
-# продолжаем выполнение, сервер крутится в фоне
-server.cancel()       # явная остановка
+# execution continues, server runs in background
+server.cancel()       # explicit stop
 ```
 
 ### Channels + Select
@@ -588,11 +613,11 @@ server.cancel()       # явная остановка
 ```
 let ch = channel[int](10)
 
-block:
+block b:
     b.spawn:
         ch.send(42)
 
-loop:
+while true:
     select:
         val from ch:
             echo("Got: {val}")
@@ -601,50 +626,78 @@ loop:
             break
 ```
 
-### No Colored Functions
+### No Colored Functions (no async/await)
 
-Нет async/await. Компилятор сам определяет IO-операции и компилирует
-их как state machines внутри block. Синтаксис одинаковый для sync и async.
+In languages with async/await, functions are split into two worlds — sync and async.
+Async "infects" the entire call chain: one async function forces all callers
+to also be async. This is known as the "colored functions" problem.
+
+Slang has **no async/await**. All functions are the same:
 
 ```
+# Regular function. IO inside — but syntax is the same.
 fn fetch(url: string) -> bytes !NetError:
-    let resp = http.get(url)?      # компилятор знает: это IO
+    let resp = http.get(url)?
     result = resp.body()
+
+# Calling — just a call, no await:
+fn process() !NetError:
+    let data = fetch("https://api.example.com")?
+    echo(data)
 ```
+
+Concurrency is achieved via `block.spawn`, not async/await:
+
+```
+# Sequential — regular call:
+let a = fetch("url1")?
+let b = fetch("url2")?
+
+# Parallel — block.spawn:
+var a: bytes
+var b: bytes
+block w:
+    w.spawn: a = fetch("url1")?
+    w.spawn: b = fetch("url2")?
+# <- both complete, a and b available
+```
+
+The compiler automatically detects IO operations inside `block.spawn`
+and compiles them as non-blocking. The programmer doesn't think about it.
 
 ## Error Handling
 
-Функция с `!ErrorType` в сигнатуре возвращает Result под капотом.
-`result` задаёт успешное значение. Ошибка возвращается через `raise`.
+A function with `!ErrorType` in its signature returns a Result under the hood.
+`result` sets the success value. Errors are returned via `raise`.
 
-### Возврат ошибки из функции (автор функции)
+### Returning errors from a function (function author)
 
 ```
 fn readConfig*(path: string) -> Config !IoError | ParseError:
-    let raw = fs.read(path)?           # ? пробрасывает IoError наверх
-    let parsed = json.parse(raw)?      # ? пробрасывает ParseError наверх
+    let raw = fs.read(path)?           # ? propagates IoError up
+    let parsed = json.parse(raw)?      # ? propagates ParseError up
     result = Config.from(parsed)
 
 fn divide*(a: int, b: int) -> int !MathError:
     if b == 0:
-        raise MathError.divByZero      # явный возврат ошибки
+        raise MathError.divByZero      # explicit error return
     result = a / b
 ```
 
-- `?` — пробрасывает ошибку вызывающему коду (если типы ошибок совместимы)
-- `raise` — явно возвращает ошибку и выходит из функции
+- `?` — propagates the error to the caller (if error types are compatible)
+- `raise` — explicitly returns an error and exits the function
 
-### Обработка ошибки (вызывающий код)
+### Handling errors (caller side)
 
-#### 1. `?` — проброс наверх (если вызывающая функция тоже возвращает ошибку)
+#### 1. `?` — propagate up (if the calling function also returns an error)
 
 ```
 fn loadApp*() -> App !IoError | ParseError:
-    let cfg = readConfig("app.toml")?   # ошибка пробрасывается
+    let cfg = readConfig("app.toml")?   # error propagated
     result = App.new(cfg)
 ```
 
-#### 2. `match` — полная обработка всех случаев
+#### 2. `match` — handle all cases
 
 ```
 match readConfig("app.toml"):
@@ -658,46 +711,46 @@ match readConfig("app.toml"):
         fatal("Error: {e}")
 ```
 
-Exhaustiveness checking — компилятор гарантирует, что все варианты обработаны.
+Exhaustiveness checking — compiler guarantees all variants are handled.
 
-#### 3. `else` — inline обработка ошибки
+#### 3. `else` — inline error handling
 
 ```
 let cfg = readConfig("app.toml") else error:
     echo("Failed: {error}")
     return
 
-# cfg здесь гарантированно успешный, тип Config (не Result)
+# cfg is guaranteed to be successful here, type is Config (not Result)
 start(cfg)
 ```
 
-#### 4. `else` с конкретным fallback значением
+#### 4. `else` with fallback value
 
 ```
 let cfg = readConfig("app.toml") else:
     Config.default()
 
-# cfg = либо прочитанный конфиг, либо default
+# cfg = either the read config or the default
 ```
 
-#### 5. `else` с обработкой конкретных ошибок
+#### 5. `else` with specific error handling
 
 ```
 let cfg = readConfig("app.toml") else error:
     match error:
         IoError.notFound: Config.default()
-        _: raise error     # остальные пробрасываем
+        _: raise error     # propagate the rest
 ```
 
 ## Tooling (built into compiler)
 
-- `slang build` — сборка (+ кросс-компиляция `--target=...`)
-- `slang fmt` — обязательный форматтер
-- `slang test` — запуск тестов
-- `slang run file.sl` — запуск
-- `slang deps` — менеджер зависимостей
-- `slang check --api-compat` — проверка совместимости API
-- LSP — разрабатывается параллельно с компилятором
+- `slang build` — build (+ cross-compilation `--target=...`)
+- `slang fmt` — mandatory formatter
+- `slang test` — run tests
+- `slang run file.sl` — run
+- `slang deps` — dependency manager
+- `slang check --api-compat` — API compatibility check
+- LSP — developed in parallel with the compiler
 
 ## Compilation Targets
 
