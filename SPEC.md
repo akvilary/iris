@@ -75,6 +75,32 @@ while true as outer:
       continue inner     # skip to next for iteration
 ```
 
+## Truthiness
+
+`if x` is true when x is **not none and not error**. Everything else is true:
+
+```
+# false:
+if none(int):          # false
+if someError:          # false
+
+# true — even if "empty":
+if 0:                  # true
+if "":                 # true
+if @[]:                # true
+
+# For emptiness checks — use .isEmpty:
+if myString.isEmpty:   # true if string is ""
+if myList.isEmpty:     # true if seq is empty
+```
+
+`else:` on expressions follows the same rule — enters else only on none or error:
+
+```
+let data = fetch(url) else:
+  defaultData()        # only if fetch returned none or error
+```
+
 ## Variables
 
 | Keyword | Meaning | Example |
@@ -777,7 +803,7 @@ block pipeline:
 
   for url in urls:
     pipeline.spawn:
-      let data = fetch(url) else error:
+      let data = fetch(url) else:
         break
       ch.send(data)
 
@@ -949,33 +975,13 @@ match readConfig("app.toml") as cfg:
 
 Exhaustiveness checking — compiler guarantees all variants are handled.
 
-#### 3. `else` — inline error handling
-
-```
-let cfg = readConfig("app.toml") else error:
-  echo("Failed: {error}")
-  return
-
-# cfg is guaranteed to be successful here, type is Config (not Result)
-start(cfg)
-```
-
-#### 4. `else` with fallback value
+#### 3. `else` with fallback value
 
 ```
 let cfg = readConfig("app.toml") else:
   Config.default()
 
 # cfg = either the read config or the default
-```
-
-#### 5. `else` with specific error handling
-
-```
-let cfg = readConfig("app.toml") else error:
-  match error:
-    IoError.notFound: Config.default()
-  else: raise error       # propagate the rest
 ```
 
 ## Tooling (built into compiler)
