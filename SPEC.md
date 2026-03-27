@@ -38,11 +38,11 @@ For libraries — `when isMain:` to run code only when file is executed directly
 ```
 # myLib.is
 fn helper*(x: int) -> int:
-    result = x + 1
+  result = x + 1
 
 when isMain:
-    echo("testing myLib")
-    echo(helper(5))
+  echo("testing myLib")
+  echo(helper(5))
 ```
 
 ## Loops
@@ -52,27 +52,27 @@ Only `while` and `for`. No `loop`. Named loops via `as`:
 ```
 # while
 while condition:
-    doSomething()
+  doSomething()
 
 # for
 for item in collection:
-    process(item)
+  process(item)
 
 for i in 0..10:
-    echo(i)             # 0, 1, 2, ..., 10 (inclusive)
+  echo(i)             # 0, 1, 2, ..., 10 (inclusive)
 
 for i in 0..<10:
-    echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
+  echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
 # Named loops via as — for break/continue targeting a specific loop
 while true as outer:
-    for item in myCollection as inner:
-        if item.id == 3:
-            continue outer     # skip to next while iteration
-        if item.id == 99:
-            break outer        # exit while entirely
-        if item.id < 0:
-            continue inner     # skip to next for iteration
+  for item in myCollection as inner:
+    if item.id == 3:
+      continue outer     # skip to next while iteration
+    if item.id == 99:
+      break outer        # exit while entirely
+    if item.id < 0:
+      continue inner     # skip to next for iteration
 ```
 
 ## Variables
@@ -100,22 +100,22 @@ Public visibility via `*` after the name (like Nim):
 
 ```
 fn helperFunc(x: int) -> int:        # private
-    x + 1
+  x + 1
 
 fn processData*(x: int) -> int:      # public
-    helperFunc(x)
+  helperFunc(x)
 
 type Config*:
-    host*: string        # public field
-    port*: int           # public field
-    secret: string       # private field
+  host*: string        # public field
+  port*: int           # public field
+  secret: string       # private field
 
 type Shape*:
-    Circle(radius: float)
-    Rect(w: float, h: float)
+  Circle(radius: float)
+  Rect(w: float, h: float)
 
 concept Drawable*:
-    fn draw(self)
+  fn draw(self)
 
 const maxRetries* = 3
 ```
@@ -160,7 +160,7 @@ export myLib.internal.parser
 
 ```
 fn funcName*(param1: Type1, param2: Type2) -> ReturnType !ErrorType:
-    ...
+  ...
 ```
 
 - `*` after name = public
@@ -175,35 +175,35 @@ Return value is set explicitly:
 
 ```
 fn add*(a: int, b: int) -> int:
-    result = a + b
+  result = a + b
 
 fn findUser*(id: int) -> User !NotFoundError:
-    let user = db.query(id)?
-    result = user
+  let user = db.query(id)?
+  result = user
 
 # result can be set anywhere, including branches:
 fn classify*(n: int) -> string:
-    if n > 0:
-        result = "positive"
-    elif n < 0:
-        result = "negative"
-    else:
-        result = "zero"
+  if n > 0:
+    result = "positive"
+  elif n < 0:
+    result = "negative"
+  else:
+    result = "zero"
 
 # result can be set early and execution continues:
 fn process*(data: slice[byte]) -> int:
-    result = 0
-    for b in data:
-        result = result + b.toInt()
-    log("sum computed")    # runs after, result already set
+  result = 0
+  for b in data:
+    result = result + b.toInt()
+  log("sum computed")    # runs after, result already set
 
 # return — early exit (uses current result value):
 fn search*(list: slice[int], target: int) -> int:
-    result = -1
-    for i, val in list:
-        if val == target:
-            result = i
-            return             # exit with current result
+  result = -1
+  for i, val in list:
+    if val == target:
+      result = i
+      return             # exit with current result
 ```
 
 Compiler verifies that `result` is set on all execution paths.
@@ -230,33 +230,33 @@ Default is immutable borrow. Annotations for other modes:
 
 ```
 fn length(s: string) -> int:             # immutable borrow (default)
-    s.len
+  s.len
 
-fn sort(var list: slice[int]):                # mutable borrow
-    ...
+fn sort(var list: slice[int]):           # mutable borrow
+  ...
 
 fn send(own msg: Message):              # take ownership
-    channel.push(msg)
+  channel.push(msg)
 
 fn normalize(own var data: slice[byte]) -> slice[byte]:  # own + mutate
-    data.trim()
-    data
+  data.trim()
+  data
 ```
 
 #### Regular code — just write code, everything is automatic
 
 ```
 fn handle(request: Request) -> Response !Error:
-    let user = db.getUser(request.userId)?
-    let posts = db.getPosts(user.id)?
-    result = Response.new(user, posts)
+  let user = db.getUser(request.userId)?
+  let posts = db.getPosts(user.id)?
+  result = Response.new(user, posts)
 # <- user, posts, everything destroyed automatically
 
 fn process():
-    let a = "hello"
-    let b = "world"
-    let long = longest(a, b)    # compiler knows: a, b, long same scope
-    echo(long)                   # OK
+  let a = "hello"
+  let b = "world"
+  let long = longest(a, b)    # compiler knows: a, b, long same scope
+  echo(long)                   # OK
 # <- a, b, long destroyed
 ```
 
@@ -272,20 +272,20 @@ cycles — use `block.alloc` to put cyclic data in a memory region.
 ```
 # Cyclic references — need block.alloc:
 fn buildDom() -> string:
-    block pool:
-        let parent = pool.alloc(Element("div"))
-        let child = pool.alloc(Element("span"))
-        parent.addChild(child)    # parent -> child
-        child.parent = parent      # child -> parent (cycle!)
-        result = parent.render().clone()
-    # <- pool destroyed, all memory freed in O(1)
+  block pool:
+    let parent = pool.alloc(Element("div"))
+    let child = pool.alloc(Element("span"))
+    parent.addChild(child)    # parent -> child
+    child.parent = parent      # child -> parent (cycle!)
+    result = parent.render().clone()
+  # <- pool destroyed, all memory freed in O(1)
 
 # NOT cyclic — no block needed, just regular code:
 fn buildList() -> string:
-    let items = seq[Item].new()
-    items.add(Item("first"))
-    items.add(Item("second"))     # items owns the data, no cycles
-    result = items.toString()
+  let items = seq[Item].new()
+  items.add(Item("first"))
+  items.add(Item("second"))     # items owns the data, no cycles
+  result = items.toString()
 # <- items destroyed automatically
 ```
 
@@ -303,25 +303,25 @@ If not — they are independent and live in separate blocks.
 ```
 # Caller owns the block, function receives the handle
 block pool:
-    let root = buildGraph(pool)   # function returns a reference
-    traverse(root)
+  let root = buildGraph(pool)   # function returns a reference
+  traverse(root)
 # <- everything freed
 
 fn buildGraph(pool: Block) -> Node:
-    let a = pool.alloc(Node("A"))
-    let b = pool.alloc(Node("B"))
-    a.link(b)
-    b.link(a)
-    result = a                     # return reference to root
+  let a = pool.alloc(Node("A"))
+  let b = pool.alloc(Node("B"))
+  a.link(b)
+  b.link(a)
+  result = a                     # return reference to root
 
 # Two independent graphs — two separate blocks
 block userPool:
-    let users = buildUserGraph(userPool)
-    processUsers(users)
+  let users = buildUserGraph(userPool)
+  processUsers(users)
 
 block rolePool:
-    let roles = buildRoleGraph(rolePool)
-    processRoles(roles)
+  let roles = buildRoleGraph(rolePool)
+  processRoles(roles)
 ```
 
 ## Collections
@@ -350,9 +350,9 @@ var empty = seq[int]()
 
 # Slice — accepts both array and seq
 fn sum(arr: slice[int]) -> int:
-    result = 0
-    for x in arr:
-        result = result + x
+  result = 0
+  for x in arr:
+    result = result + x
 
 sum(fixed)      # OK — slice into stack array
 sum(dynamic)    # OK — slice into seq
@@ -377,7 +377,7 @@ type Point = tuple[x: int, y: int]
 
 # Return multiple values without defining a separate type
 fn divide*(a: int, b: int) -> (quotient: int, remainder: int):
-    result = (quotient: a / b, remainder: a % b)
+  result = (quotient: a / b, remainder: a % b)
 
 let r = divide(10, 3)
 echo(r.quotient)            # 3
@@ -418,8 +418,8 @@ n = n - 10               # ERROR: natural cannot be negative
 
 # Ideal for indices, sizes, counters
 fn createBuffer*(size: natural) -> Buffer:
-    # size is guaranteed >= 0, no validation needed
-    ...
+  # size is guaranteed >= 0, no validation needed
+  ...
 ```
 
 ### Option
@@ -434,8 +434,8 @@ let b = none(int)           # Option[int] without value
 
 # Pattern matching
 match a as val:
-    some: echo(val)               # 42
-    none: echo("nothing")
+  some: echo(val)               # 42
+  none: echo("nothing")
 
 # else — default value
 let x = a else: 0           # 42 (has value)
@@ -443,8 +443,8 @@ let y = b else: 0           # 0 (no value — fallback)
 
 # ? — propagate none (like ? for errors)
 fn findUser*(id: int) -> Option[User]:
-    let row = db.find(id)?   # if db.find returns none → function returns none
-    result = some(User.from(row))
+  let row = db.find(id)?   # if db.find returns none → function returns none
+  result = some(User.from(row))
 
 # Chaining with ?
 let name = getUser(1)?.name  # none if user not found
@@ -469,7 +469,7 @@ let greeting = "Hello, {name}!"      # SSO
 let big = readFile("big.txt")        # heap, single owner
 
 fn greet(s: string):                  # immutable borrow, zero cost
-    echo(s)
+  echo(s)
 
 let buf = StrBuf.new()
 buf.add("part1")
@@ -502,7 +502,7 @@ Supports iteration, `ord`, sets:
 
 ```
 enum Direction*:
-    north, south, east, west
+  north, south, east, west
 
 let d = Direction.north
 echo(d)                         # 0 (enum is always int)
@@ -519,23 +519,23 @@ if Direction.north in dirs:
 
 # Explicit numeric values
 enum Color*:
-    red = 0, green = 1, blue = 2
+  red = 0, green = 1, blue = 2
 
 # String values — $ returns the string value instead of variant name
 enum HttpMethod*:
-    get = "GET"
-    post = "POST"
-    put = "PUT"
-    delete = "DELETE"
+  get = "GET"
+  post = "POST"
+  put = "PUT"
+  delete = "DELETE"
 
 echo(HttpMethod.get)            # 0 (int)
 echo($HttpMethod.get)           # "GET" ($ returns string value)
 
 enum LogLevel*:
-    debug = "DEBUG"
-    info = "INFO"
-    warn = "WARNING"
-    error = "ERROR"
+  debug = "DEBUG"
+  info = "INFO"
+  warn = "WARNING"
+  error = "ERROR"
 
 echo($LogLevel.warn)            # "WARNING"
 ```
@@ -547,15 +547,15 @@ Enum value without `$` is always `int`.
 
 ```
 enum Shape*:
-    Circle(radius: float)
-    Rect(w: float, h: float)
-    Point                        # variant without data — also OK
+  Circle(radius: float)
+  Rect(w: float, h: float)
+  Point                        # variant without data — also OK
 
 fn area*(s: Shape) -> float:
-    result = match s:
-        Circle(r): PI * r * r
-        Rect(w, h): w * h
-        Point: 0.0
+  result = match s:
+    Circle(r): PI * r * r
+    Rect(w, h): w * h
+    Point: 0.0
 ```
 
 Pattern matching with exhaustiveness checking — compiler guarantees
@@ -564,8 +564,8 @@ all variants are handled. Use `else` to catch remaining cases,
 
 ```
 match direction:
-    Direction.north: goUp()
-    Direction.south: goDown()
+  Direction.north: goUp()
+  Direction.south: goDown()
 else: discard                        # explicitly ignore east, west
 ```
 
@@ -579,15 +579,15 @@ No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 ```
 concept Printable:
-    fn toString(self) -> string
+  fn toString(self) -> string
 
 concept Comparable:
-    fn lessThan(self, other: Self) -> bool
-    fn equals(self, other: Self) -> bool
+  fn lessThan(self, other: Self) -> bool
+  fn equals(self, other: Self) -> bool
 
 concept Serializable:
-    fn toJson(self) -> string
-    fn fromJson(raw: string) -> Self
+  fn toJson(self) -> string
+  fn fromJson(raw: string) -> Self
 ```
 
 Usage is **optional**, for documentation and better compiler errors:
@@ -595,13 +595,13 @@ Usage is **optional**, for documentation and better compiler errors:
 ```
 # With concept — better error messages:
 fn sort[T: Comparable](var list: slice[T]):
-    ...
+  ...
 # error: type Socket does not satisfy concept Comparable
 #   missing: fn lessThan(self, other: Socket) -> bool
 
 # Without concept — also works, duck typing at call site:
 fn sort[T](var list: slice[T]):
-    ...
+  ...
 # error: type Socket has no method 'lessThan'
 #   called from sort() at main.is:10
 ```
@@ -610,11 +610,11 @@ A type automatically satisfies a concept if it has the required methods:
 
 ```
 type User:
-    name: string
-    age: int
+  name: string
+  age: int
 
 fn toString(self: User) -> string:
-    result = "{self.name}, {self.age}"
+  result = "{self.name}, {self.age}"
 
 # User automatically satisfies Printable — has toString
 # No impl, no registration needed
@@ -624,12 +624,12 @@ fn toString(self: User) -> string:
 
 ```
 fn map[T, U](list: slice[T], f: fn(T) -> U) -> seq[U]:
-    result = [f(x) for x in list]
+  result = [f(x) for x in list]
 
 # With concept constraint (optional):
 fn printAll[T: Printable](items: slice[T]):
-    for item in items:
-        echo(item.toString())
+  for item in items:
+    echo(item.toString())
 ```
 
 ## Metaprogramming
@@ -654,11 +654,11 @@ Simple compile-time code substitution, zero overhead:
 
 ```
 template notEqual(a, b) -> bool:
-    not (a == b)
+  not (a == b)
 
 # Usage — expanded at compile-time:
 if notEqual(x, y):
-    echo("different")
+  echo("different")
 
 # Expands to:
 # if not (x == y):
@@ -671,24 +671,24 @@ Receive AST, return modified AST:
 
 ```
 macro serializable*(body: Ast) -> Ast:
-    # adds toJson() and fromJson() methods to a type
-    let typeName = body.name
-    body.addFn:
-        fn toJson*(self) -> string:
-            var buf = StrBuf.new()
-            buf.add("{")
-            for i, field in body.fields:
-                if i > 0: buf.add(", ")
-                buf.add("\"{field.name}\": {self.{field.name}}")
-            buf.add("}")
-            result = buf.toString()
-    result = body
+  # adds toJson() and fromJson() methods to a type
+  let typeName = body.name
+  body.addFn:
+    fn toJson*(self) -> string:
+      var buf = StrBuf.new()
+      buf.add("{")
+      for i, field in body.fields:
+        if i > 0: buf.add(", ")
+        buf.add("\"{field.name}\": {self.{field.name}}")
+      buf.add("}")
+      result = buf.toString()
+  result = body
 
 # Usage — macro is just called, block is its AST argument:
 serializable:
-    type User:
-        name*: string
-        age*: int
+  type User:
+    name*: string
+    age*: int
 
 # Compiler expands to:
 # type User:
@@ -704,13 +704,13 @@ Macros can parse custom syntax and generate code:
 
 ```
 macro html(body: Ast) -> Ast:
-    # parse DSL and generate Element constructors
-    ...
+  # parse DSL and generate Element constructors
+  ...
 
 let page = html:
-    div(class: "container"):
-        h1: "Hello"
-        p: "World"
+  div(class: "container"):
+    h1: "Hello"
+    p: "World"
 
 # Expands to Element constructor calls
 ```
@@ -732,103 +732,103 @@ Behavior is determined by contents, not by different keywords.
 ```
 # Exit from nested loops
 block search:
-    for item in list1:
-        for item2 in list2:
-            if item == item2:
-                break search         # exit both loops
-    echo("not found")
+  for item in list1:
+    for item2 in list2:
+      if item == item2:
+        break search         # exit both loops
+  echo("not found")
 
 # Nested named blocks
 block outer:
-    for i in 0..100:
-        block inner:
-            if i == 50:
-                break outer          # exit everything
-            if i % 2 == 0:
-                break inner          # skip this block
-            process(i)
+  for i in 0..100:
+    block inner:
+      if i == 50:
+        break outer          # exit everything
+      if i % 2 == 0:
+        break inner          # skip this block
+      process(i)
 ```
 
 ### Block as expression (returns a value)
 
 ```
 let count = block b:
-    if users.isEmpty:
-        b.result = 0
-        break b
-    b.result = users.len
+  if users.isEmpty:
+    b.result = 0
+    break b
+  b.result = users.len
 
 # Or simpler:
 let status = block b:
-    b.result = if isReady: "ok" else: "waiting"
+  b.result = if isReady: "ok" else: "waiting"
 ```
 
 ### Structured Concurrency
 
 ```
 block workers:
-    workers.spawn: fetch("url1")
-    workers.spawn: fetch("url2")
+  workers.spawn: fetch("url1")
+  workers.spawn: fetch("url2")
 # <- all tasks guaranteed to be complete
 
 # spawn is available via block handle
 block pipeline:
-    let ch = channel[string](10)
+  let ch = channel[string](10)
 
-    for url in urls:
-        pipeline.spawn:
-            let data = fetch(url) else error:
-                break
-            ch.send(data)
+  for url in urls:
+    pipeline.spawn:
+      let data = fetch(url) else error:
+        break
+      ch.send(data)
 
-    for _ in urls:
-        select:
-            val from ch:
-                process(val)
-            after 10.sec:
-                break pipeline       # timeout — exit everything
+  for _ in urls:
+    select:
+      val from ch:
+        process(val)
+      after 10.sec:
+        break pipeline       # timeout — exit everything
 ```
 
 ### Nested blocks for pipeline
 
 ```
 block pipeline:
-    let raw = channel[bytes](100)
-    let parsed = channel[Record](100)
+  let raw = channel[bytes](100)
+  let parsed = channel[Record](100)
 
-    block producers:
-        for url in urls:
-            producers.spawn:
-                raw.send(fetch(url))
+  block producers:
+    for url in urls:
+      producers.spawn:
+        raw.send(fetch(url))
 
-    block consumers:
-        for _ in urls:
-            consumers.spawn:
-                let data = raw.recv()
-                parsed.send(parse(data))
-    # producers done -> consumers done -> pipeline done
+  block consumers:
+    for _ in urls:
+      consumers.spawn:
+        let data = raw.recv()
+        parsed.send(parse(data))
+  # producers done -> consumers done -> pipeline done
 ```
 
 ### Memory Regions (block.alloc)
 
 ```
 block pool:
-    let a = pool.alloc(Node("A"))
-    let b = pool.alloc(Node("B"))
-    a.link(b)
-    b.link(a)                    # cycle — OK, same region
+  let a = pool.alloc(Node("A"))
+  let b = pool.alloc(Node("B"))
+  a.link(b)
+  b.link(a)                    # cycle — OK, same region
 # <- all memory freed in O(1)
 
 # Data cannot leave the block:
 block pool:
-    let node = pool.alloc(Node("A"))
-    node                         # ERROR: node is bound to pool
+  let node = pool.alloc(Node("A"))
+  node                         # ERROR: node is bound to pool
 
 # Combined with concurrency:
 block ctx:
-    let graph = ctx.alloc(Graph.new())
-    ctx.spawn: traverse(graph)
-    ctx.spawn: validate(graph)
+  let graph = ctx.alloc(Graph.new())
+  ctx.spawn: traverse(graph)
+  ctx.spawn: validate(graph)
 # <- tasks complete, memory freed
 
 # Without .alloc — regular block, zero overhead
@@ -841,7 +841,7 @@ block ctx:
 ```
 # For daemons/servers — explicit unstructured spawn (rare)
 let server = detach:
-    listen(8080)
+  listen(8080)
 # execution continues, server runs in background
 server.cancel()       # explicit stop
 ```
@@ -852,16 +852,16 @@ server.cancel()       # explicit stop
 let ch = channel[int](10)
 
 block b:
-    b.spawn:
-        ch.send(42)
+  b.spawn:
+    ch.send(42)
 
 while true:
-    select:
-        val from ch:
-            echo("Got: {val}")
-        after 5.sec:
-            echo("Timeout!")
-            break
+  select:
+    val from ch:
+      echo("Got: {val}")
+    after 5.sec:
+      echo("Timeout!")
+      break
 ```
 
 ### No Colored Functions (no async/await)
@@ -875,13 +875,13 @@ Iris has **no async/await**. All functions are the same:
 ```
 # Regular function. IO inside — but syntax is the same.
 fn fetch(url: string) -> bytes !NetError:
-    let resp = http.get(url)?
-    result = resp.body()
+  let resp = http.get(url)?
+  result = resp.body()
 
 # Calling — just a call, no await:
 fn process() !NetError:
-    let data = fetch("https://api.example.com")?
-    echo(data)
+  let data = fetch("https://api.example.com")?
+  echo(data)
 ```
 
 Concurrency is achieved via `block.spawn`, not async/await:
@@ -895,8 +895,8 @@ let b = fetch("url2")?
 var a: bytes
 var b: bytes
 block w:
-    w.spawn: a = fetch("url1")?
-    w.spawn: b = fetch("url2")?
+  w.spawn: a = fetch("url1")?
+  w.spawn: b = fetch("url2")?
 # <- both complete, a and b available
 ```
 
@@ -912,14 +912,14 @@ A function with `!ErrorType` in its signature returns a Result under the hood.
 
 ```
 fn readConfig*(path: string) -> Config !IoError | ParseError:
-    let raw = fs.read(path)?           # ? propagates IoError up
-    let parsed = json.parse(raw)?      # ? propagates ParseError up
-    result = Config.from(parsed)
+  let raw = fs.read(path)?           # ? propagates IoError up
+  let parsed = json.parse(raw)?      # ? propagates ParseError up
+  result = Config.from(parsed)
 
 fn divide*(a: int, b: int) -> int !MathError:
-    if b == 0:
-        raise MathError.divByZero      # explicit error return
-    result = a / b
+  if b == 0:
+    raise MathError.divByZero      # explicit error return
+  result = a / b
 ```
 
 - `?` — propagates the error to the caller (if error types are compatible)
@@ -931,22 +931,22 @@ fn divide*(a: int, b: int) -> int !MathError:
 
 ```
 fn loadApp*() -> App !IoError | ParseError:
-    let cfg = readConfig("app.toml")?   # error propagated
-    result = App.new(cfg)
+  let cfg = readConfig("app.toml")?   # error propagated
+  result = App.new(cfg)
 ```
 
 #### 2. `match` — handle all cases
 
 ```
 match readConfig("app.toml") as cfg:
-    ok:
-        start(cfg)
-    error(IoError.notFound):
-        createDefault()
-    error(ParseError.syntax(line)):
-        echo("Syntax error at line {line}")
-    error(e):
-        fatal("Error: {e}")
+  ok:
+    start(cfg)
+  error(IoError.notFound):
+    createDefault()
+  error(ParseError.syntax(line)):
+    echo("Syntax error at line {line}")
+  error(e):
+    fatal("Error: {e}")
 ```
 
 Exhaustiveness checking — compiler guarantees all variants are handled.
@@ -955,8 +955,8 @@ Exhaustiveness checking — compiler guarantees all variants are handled.
 
 ```
 let cfg = readConfig("app.toml") else error:
-    echo("Failed: {error}")
-    return
+  echo("Failed: {error}")
+  return
 
 # cfg is guaranteed to be successful here, type is Config (not Result)
 start(cfg)
@@ -966,7 +966,7 @@ start(cfg)
 
 ```
 let cfg = readConfig("app.toml") else:
-    Config.default()
+  Config.default()
 
 # cfg = either the read config or the default
 ```
@@ -975,9 +975,9 @@ let cfg = readConfig("app.toml") else:
 
 ```
 let cfg = readConfig("app.toml") else error:
-    match error:
-        IoError.notFound: Config.default()
-    else: raise error       # propagate the rest
+  match error:
+    IoError.notFound: Config.default()
+  else: raise error       # propagate the rest
 ```
 
 ## Tooling (built into compiler)
