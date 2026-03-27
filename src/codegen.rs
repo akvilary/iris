@@ -7,6 +7,8 @@ pub struct CodeGen {
     output: String,
     indent: usize,
     var_types: HashMap<String, String>,
+    type_fields: HashMap<String, Vec<String>>,  // type name -> field names
+    enum_names: Vec<String>,                     // known enum type names
 }
 
 impl CodeGen {
@@ -15,6 +17,8 @@ impl CodeGen {
             output: String::new(),
             indent: 0,
             var_types: HashMap::new(),
+            type_fields: HashMap::new(),
+            enum_names: Vec::new(),
         }
     }
 
@@ -137,14 +141,24 @@ impl CodeGen {
         }
         if !decls.is_empty() { self.emit("\n"); }
 
-        // Functions first, top-level code second
-        let mut top_level = Vec::new();
+        // Types and enums first
         for stmt in stmts {
-            if matches!(stmt, Stmt::FnDecl { .. }) {
+            if matches!(stmt, Stmt::TypeDecl { .. } | Stmt::EnumDecl { .. }) {
                 self.gen_stmt(stmt);
                 self.emit("\n");
-            } else {
-                top_level.push(stmt);
+            }
+        }
+
+        // Functions second
+        let mut top_level = Vec::new();
+        for stmt in stmts {
+            match stmt {
+                Stmt::FnDecl { .. } => {
+                    self.gen_stmt(stmt);
+                    self.emit("\n");
+                }
+                Stmt::TypeDecl { .. } | Stmt::EnumDecl { .. } => {} // already emitted
+                _ => top_level.push(stmt),
             }
         }
 
@@ -221,6 +235,9 @@ impl CodeGen {
                 self.gen_expr(expr);
                 self.emit(";\n");
             }
+            Stmt::TypeDecl { name, fields, .. } => self.gen_type_decl(name, fields),
+            Stmt::EnumDecl { name, variants, .. } => self.gen_enum_decl(name, variants),
+            Stmt::Case { expr, branches, else_body } => self.gen_case(expr, branches, else_body),
             Stmt::Discard => self.emit_line("(void)0;"),
             _ => self.emit_line("/* not yet implemented */"),
         }
@@ -334,6 +351,106 @@ impl CodeGen {
         }
     }
 
+    fn gen_type_decl(&mut self, name: &str, fields: &[TypeField]) {
+        self.type_fields.insert(
+            name.to_string(),
+            fields.iter().map(|f| f.name.clone()).collect(),
+        );
+        self.emit("typedef struct {\n");
+        self.indent += 1;
+        for f in fields {
+            self.emit_line(&format!("{} {};", self.type_to_c(&f.type_ann), f.name));
+        }
+        self.indent -= 1;
+        self.emit_line(&format!("}} {};", name));
+    }
+
+    fn gen_enum_decl(&mut self, name: &str, variants: &[EnumVariant]) {
+        // Check if simple enum (no data) or ADT
+        let is_simple = variants.iter().all(|v| {
+            matches!(v.value, None | Some(EnumValue::Int(_)) | Some(EnumValue::String(_)))
+        });
+
+        self.enum_names.push(name.to_string());
+
+        if is_simple {
+            self.emit("typedef enum {\n");
+            self.indent += 1;
+            for (i, v) in variants.iter().enumerate() {
+                self.emit_indent();
+                self.emit(&format!("{}_{}", name, v.name));
+                if let Some(EnumValue::Int(n)) = &v.value {
+                    self.emit(&format!(" = {}", n));
+                }
+                if i < variants.len() - 1 { self.emit(","); }
+                self.emit("\n");
+            }
+            self.indent -= 1;
+            self.emit_line(&format!("}} {};", name));
+
+            // String value lookup for $ operator
+            let has_strings = variants.iter().any(|v| matches!(v.value, Some(EnumValue::String(_))));
+            if has_strings {
+                self.emit(&format!("const char* {}_to_string({} v) {{\n", name, name));
+                self.indent += 1;
+                self.emit_line(&format!("switch (v) {{"));
+                self.indent += 1;
+                for v in variants {
+                    let s = match &v.value {
+                        Some(EnumValue::String(s)) => s.clone(),
+                        _ => v.name.clone(),
+                    };
+                    self.emit_line(&format!("case {}_{}: return \"{}\";", name, v.name, s));
+                }
+                self.emit_line("default: return \"unknown\";");
+                self.indent -= 1;
+                self.emit_line("}");
+                self.indent -= 1;
+                self.emit("}\n\n");
+            }
+        } else {
+            // ADT — tagged union
+            self.emit_line(&format!("typedef enum {{ /* {} tags */ }} {}_Tag;", name, name));
+            self.emit_line(&format!("/* ADT {} not fully implemented */", name));
+        }
+    }
+
+    fn gen_case(&mut self, expr: &Expr, branches: &[CaseBranch], else_body: &Option<Vec<Stmt>>) {
+        // For simple enums, generate switch
+        self.emit_indent();
+        self.emit("switch (");
+        self.gen_expr(expr);
+        self.emit(") {\n");
+        self.indent += 1;
+
+        for branch in branches {
+            match &branch.pattern {
+                CasePattern::Variant(name) => {
+                    self.emit_line(&format!("case {}:", name));
+                }
+                CasePattern::Ok => self.emit_line("case 1: /* ok */"),
+                CasePattern::Error(_) => self.emit_line("case 0: /* error */"),
+                CasePattern::Some => self.emit_line("case 1: /* some */"),
+                CasePattern::None => self.emit_line("case 0: /* none */"),
+            }
+            self.indent += 1;
+            for s in &branch.body { self.gen_stmt(s); }
+            self.emit_line("break;");
+            self.indent -= 1;
+        }
+
+        if let Some(body) = else_body {
+            self.emit_line("default:");
+            self.indent += 1;
+            for s in body { self.gen_stmt(s); }
+            self.emit_line("break;");
+            self.indent -= 1;
+        }
+
+        self.indent -= 1;
+        self.emit_line("}");
+    }
+
     // ── Expression codegen ──
 
     fn gen_expr(&mut self, expr: &Expr) {
@@ -370,6 +487,21 @@ impl CodeGen {
             Expr::Call { func, args } => {
                 if let Expr::Ident(name) = func.as_ref() {
                     if name == "echo" { return self.gen_echo(args); }
+                    // Struct constructor: Point(10, 20) → (Point){.x = 10, .y = 20}
+                    if let Some(fields) = self.type_fields.get(name).cloned() {
+                        self.emit(&format!("({}){{", name));
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 { self.emit(", "); }
+                            if let Some(fname) = arg.name.as_ref() {
+                                self.emit(&format!(".{} = ", fname));
+                            } else if let Some(fname) = fields.get(i) {
+                                self.emit(&format!(".{} = ", fname));
+                            }
+                            self.gen_expr(&arg.value);
+                        }
+                        self.emit("}");
+                        return;
+                    }
                 }
                 self.gen_expr(func);
                 self.emit("(");
@@ -486,12 +618,22 @@ impl CodeGen {
             },
             Expr::Call { func, .. } => {
                 if let Expr::Ident(name) = func.as_ref() {
-                    return self.var_types.get(name).cloned().unwrap_or("int64_t".to_string());
+                    // Struct constructor
+                    if self.type_fields.contains_key(name) {
+                        return name.to_string();
+                    }
+                    return self.var_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
                 }
                 "int64_t"
             }
             Expr::Ident(name) => {
-                return self.var_types.get(name).cloned().unwrap_or("int64_t".to_string());
+                // Detect enum values like Color_red → type is Color
+                for en in &self.enum_names {
+                    if name.starts_with(&format!("{}_", en)) {
+                        return en.clone();
+                    }
+                }
+                return self.var_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
             }
             _ => "int64_t",
         }.to_string()

@@ -1,0 +1,32 @@
+# Types and enums in Iris
+
+type Point*:
+  @x: int
+  @y: int
+
+enum Color*:
+  red, green, blue
+
+enum HttpMethod*:
+  get = "GET"
+  post = "POST"
+  put = "PUT"
+  delete = "DELETE"
+
+# Create a point
+let p = Point(10, 20)
+echo(p.x)
+echo(p.y)
+
+# Use enum
+let c = Color_red
+echo(c)
+
+# Case
+case c:
+  of Color_red:
+    echo("Red!")
+  of Color_green:
+    echo("Green!")
+  of Color_blue:
+    echo("Blue!")

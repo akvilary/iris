@@ -104,6 +104,9 @@ impl Parser {
             TokenKind::Result => self.parse_result_assign(),
             TokenKind::Block => self.parse_block(),
             TokenKind::Spawn => self.parse_spawn(),
+            TokenKind::Type => self.parse_type_decl(),
+            TokenKind::Enum => self.parse_enum_decl(),
+            TokenKind::Case => self.parse_case(),
             TokenKind::Import => self.parse_import(),
             TokenKind::Raise => { self.advance(); Ok(Stmt::Raise(self.parse_expr()?)) }
             TokenKind::Discard => { self.advance(); Ok(Stmt::Discard) }
@@ -298,6 +301,163 @@ impl Parser {
     fn parse_import(&mut self) -> CompileResult<Stmt> {
         self.advance();
         Ok(Stmt::Import(self.parse_ident_name()?))
+    }
+
+    fn parse_type_decl(&mut self) -> CompileResult<Stmt> {
+        self.advance(); // skip 'type'
+        let name = self.parse_ident_name()?;
+        let public = self.try_parse_public();
+        self.expect(&TokenKind::Colon)?;
+        self.skip_newlines();
+
+        let mut fields = Vec::new();
+        if self.at(&TokenKind::Indent) {
+            self.advance();
+            while !self.at(&TokenKind::Dedent) && !self.at(&TokenKind::Eof) {
+                self.skip_newlines();
+                if self.at(&TokenKind::Dedent) { break; }
+
+                // Fields start with @
+                self.expect(&TokenKind::At)?;
+                let fname = self.parse_ident_name()?;
+                let fpublic = self.try_parse_public();
+                self.expect(&TokenKind::Colon)?;
+                let ftype = self.parse_type()?;
+                fields.push(TypeField { name: fname, public: fpublic, type_ann: ftype });
+                self.skip_newlines();
+            }
+            if self.at(&TokenKind::Dedent) { self.advance(); }
+        }
+
+        Ok(Stmt::TypeDecl { name, public, fields })
+    }
+
+    fn parse_enum_decl(&mut self) -> CompileResult<Stmt> {
+        self.advance(); // skip 'enum'
+        let name = self.parse_ident_name()?;
+        let public = self.try_parse_public();
+        self.expect(&TokenKind::Colon)?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        if self.at(&TokenKind::Indent) {
+            self.advance();
+            while !self.at(&TokenKind::Dedent) && !self.at(&TokenKind::Eof) {
+                self.skip_newlines();
+                if self.at(&TokenKind::Dedent) { break; }
+
+                let vname = self.parse_ident_name()?;
+
+                let value = if self.at(&TokenKind::Eq) {
+                    self.advance();
+                    match self.peek().clone() {
+                        TokenKind::IntLit(n) => { self.advance(); Some(EnumValue::Int(n)) }
+                        TokenKind::StringLit(s) => { self.advance(); Some(EnumValue::String(s)) }
+                        _ => return Err(self.error("expected int or string value for enum")),
+                    }
+                } else if self.at(&TokenKind::LParen) {
+                    // Enum with data: Variant(field: Type, ...)
+                    self.advance();
+                    let mut fields = Vec::new();
+                    while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                        let fname = self.parse_ident_name()?;
+                        self.expect(&TokenKind::Colon)?;
+                        let ftype = self.parse_type()?;
+                        fields.push((fname, ftype));
+                        if self.at(&TokenKind::Comma) { self.advance(); }
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Some(EnumValue::Fields(fields))
+                } else {
+                    None
+                };
+
+                variants.push(EnumVariant { name: vname, value });
+
+                // Allow comma-separated on same line
+                if self.at(&TokenKind::Comma) { self.advance(); }
+                self.skip_newlines();
+            }
+            if self.at(&TokenKind::Dedent) { self.advance(); }
+        }
+
+        Ok(Stmt::EnumDecl { name, public, variants })
+    }
+
+    fn parse_case(&mut self) -> CompileResult<Stmt> {
+        self.advance(); // skip 'case'
+        let expr = self.parse_expr()?;
+        self.expect(&TokenKind::Colon)?;
+        self.skip_newlines();
+
+        let mut branches = Vec::new();
+        let mut else_body = None;
+
+        if self.at(&TokenKind::Indent) {
+            self.advance();
+            while !self.at(&TokenKind::Dedent) && !self.at(&TokenKind::Eof) {
+                self.skip_newlines();
+                if self.at(&TokenKind::Dedent) { break; }
+
+                if self.at(&TokenKind::Else) {
+                    self.advance();
+                    self.expect(&TokenKind::Colon)?;
+                    self.skip_newlines();
+                    else_body = Some(self.parse_block_body()?);
+                    break;
+                }
+
+                self.expect(&TokenKind::Of)?;
+                let pattern = self.parse_case_pattern()?;
+                self.expect(&TokenKind::Colon)?;
+                self.skip_newlines();
+                let body = self.parse_block_body()?;
+                branches.push(CaseBranch { pattern, body });
+                self.skip_newlines();
+            }
+            if self.at(&TokenKind::Dedent) { self.advance(); }
+        }
+
+        // else at same indent level as case
+        if self.at(&TokenKind::Else) {
+            self.advance();
+            self.expect(&TokenKind::Colon)?;
+            self.skip_newlines();
+            else_body = Some(self.parse_block_body()?);
+        }
+
+        Ok(Stmt::Case { expr, branches, else_body })
+    }
+
+    fn parse_case_pattern(&mut self) -> CompileResult<CasePattern> {
+        match self.peek().clone() {
+            TokenKind::Ident(name) if name == "ok" => {
+                self.advance();
+                Ok(CasePattern::Ok)
+            }
+            TokenKind::Ident(name) if name == "error" => {
+                self.advance();
+                let detail = if self.at(&TokenKind::LParen) {
+                    self.advance();
+                    let name = self.parse_ident_name()?;
+                    // Allow dotted: error(IoError.notFound)
+                    let mut full = name;
+                    while self.at(&TokenKind::Dot) {
+                        self.advance();
+                        full = format!("{}.{}", full, self.parse_ident_name()?);
+                    }
+                    self.expect(&TokenKind::RParen)?;
+                    Some(full)
+                } else {
+                    None
+                };
+                Ok(CasePattern::Error(detail))
+            }
+            TokenKind::Some => { self.advance(); Ok(CasePattern::Some) }
+            TokenKind::None => { self.advance(); Ok(CasePattern::None) }
+            TokenKind::Ident(name) => { self.advance(); Ok(CasePattern::Variant(name)) }
+            _ => Err(self.error(format!("expected case pattern, got {:?}", self.peek()))),
+        }
     }
 
     fn parse_expr_or_assign(&mut self) -> CompileResult<Stmt> {
