@@ -170,7 +170,8 @@ fn funcName*(param1: Type1, param2: Type2) -> ReturnType !ErrorType:
 
 ### Return Values
 
-`result` is a reserved word. Return value is set explicitly:
+`result` is a reserved word — cannot be used as a variable name.
+Return value is set explicitly:
 
 ```
 fn add*(a: int, b: int) -> int:
@@ -424,16 +425,16 @@ fn createBuffer*(size: natural) -> Buffer:
 ### Option
 
 No null/nil in Iris. `Option[T]` represents a value that may or may not exist.
-Works with `?`, `case of`, and `else` — same patterns as error handling.
+Works with `?`, `match`, and `else` — same patterns as error handling.
 
 ```
 # Creating
 let a = some(42)            # Option[int] with value
-let b = none[int]()         # Option[int] without value
+let b = none(int)           # Option[int] without value
 
 # Pattern matching
-match a:
-    some(val): echo(val)          # 42
+match a as val:
+    some: echo(val)               # 42
     none: echo("nothing")
 
 # else — default value
@@ -444,13 +445,6 @@ let y = b else: 0           # 0 (no value — fallback)
 fn findUser*(id: int) -> Option[User]:
     let row = db.find(id)?   # if db.find returns none → function returns none
     result = some(User.from(row))
-
-# Boolean checks
-if a.isSome:
-    echo("has value")
-
-if b.isNone:
-    echo("empty")
 
 # Chaining with ?
 let name = getUser(1)?.name  # none if user not found
@@ -572,7 +566,7 @@ all variants are handled. Use `else` to catch remaining cases,
 match direction:
     Direction.north: goUp()
     Direction.south: goDown()
-    else: discard                    # explicitly ignore east, west
+else: discard                        # explicitly ignore east, west
 ```
 
 No `_:` wildcard — use `else:` instead. `match` must always be exhaustive
@@ -944,8 +938,8 @@ fn loadApp*() -> App !IoError | ParseError:
 #### 2. `match` — handle all cases
 
 ```
-match readConfig("app.toml"):
-    ok(cfg):
+match readConfig("app.toml") as cfg:
+    ok:
         start(cfg)
     error(IoError.notFound):
         createDefault()
@@ -983,7 +977,7 @@ let cfg = readConfig("app.toml") else:
 let cfg = readConfig("app.toml") else error:
     match error:
         IoError.notFound: Config.default()
-        else: raise error  # propagate the rest
+    else: raise error       # propagate the rest
 ```
 
 ## Tooling (built into compiler)
