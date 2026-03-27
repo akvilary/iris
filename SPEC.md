@@ -47,7 +47,7 @@ when isMain:
 
 ## Loops
 
-Only `while` and `for`. No `loop`. Named loops via `@label`.
+Only `while` and `for`. No `loop`. Named loops via `label.
 
 A loop is a block — spawns are cancelled and memory is freed on exit.
 
@@ -66,15 +66,15 @@ for i in 0..10:
 for i in 0..<10:
   echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
-# Named loops via @label — for break/continue targeting a specific loop
-while true @outer:
-  for item in myCollection @inner:
+# Named loops via `label — for break/continue targeting a specific loop
+while true `outer:
+  for item in myCollection `inner:
     if item.id == 3:
-      continue @outer     # skip to next while iteration
+      continue `outer     # skip to next while iteration
     if item.id == 99:
-      break @outer        # exit while entirely
+      break `outer        # exit while entirely
     if item.id < 0:
-      continue @inner     # skip to next for iteration
+      continue `inner     # skip to next for iteration
 ```
 
 ### Loop as expression
@@ -84,26 +84,26 @@ Loops can return values via `result`. If the loop may complete without
 
 ```
 # while true — always breaks, result always set:
-let input = while true @loop:
+let input = while true `loop:
   let line = readLine()
   if not line.isEmpty:
     result = line
-    break @loop
+    break `loop
 
 # for — may complete without break, else required:
-let found = for item in list @search:
+let found = for item in list `search:
   if item.matches(query):
     result = item
-    break @search
+    break `search
 else:
   result = defaultItem
 
 # Spawns inside loop are cancelled on break:
-for url in urls @urls:
+for url in urls `urls:
   spawn:
     fetch(url)
   if timeout:
-    break @urls          # all spawns cancelled, memory freed
+    break `urls          # all spawns cancelled, memory freed
 ```
 
 ## Expressions
@@ -184,6 +184,27 @@ var counter = 0                    # runtime, mutable
 counter = counter + 1              # OK
 ```
 
+## Attributes
+
+Type fields are defined with `@` prefix. This allows using reserved words as field names:
+
+```
+type User:
+  @name: string
+  @age: int
+
+type JsonResponse:
+  @for: string         # reserved word — OK with @
+  @type: string        # reserved word — OK with @
+  @data: int
+```
+
+Access fields the same way:
+```
+let u = User(@name: "Alice", @age: 30)
+echo(u.name)           # read field
+```
+
 ## Visibility
 
 Public visibility via `*` after the name (like Nim):
@@ -196,9 +217,9 @@ fn processData*(x: int) -> int:      # public
   helperFunc(x)
 
 type Config*:
-  host*: string        # public field
-  port*: int           # public field
-  secret: string       # private field
+  @host*: string        # public field
+  @port*: int           # public field
+  @secret: string       # private field
 
 type Shape*:
   Circle(radius: float)
@@ -576,8 +597,8 @@ let a = some(42)            # Option[int] with value
 let b = none(int)           # Option[int] without value
 
 # Pattern matching
-case a as val:
-  of some: echo(val)               # 42
+case a:
+  of some: echo(a.get())           # 42
   of none: echo("nothing")
 
 # else — default value
@@ -591,6 +612,15 @@ fn findUser*(id: int) -> Option[User]:
 
 # Chaining with ?
 let name = getUser(1)?.name  # none if user not found
+```
+
+## Rune
+
+`rune` — a single Unicode code point. Literals use single quotes:
+
+```
+let ch: rune = 'A'
+let emoji: rune = '🎉'
 ```
 
 ## Strings
@@ -696,8 +726,8 @@ enum Shape*:
 
 fn area*(s: Shape) -> float:
   result = case s:
-    of Circle as c: PI * c.radius * c.radius
-    of Rect as r: r.w * r.h
+    of Circle: PI * s.radius * s.radius
+    of Rect: s.w * s.h
     of Point: 0.0
 ```
 
@@ -753,8 +783,8 @@ A type automatically satisfies a concept if it has the required methods:
 
 ```
 type User:
-  name: string
-  age: int
+  @name: string
+  @age: int
 
 fn toString(self: User) -> string:
   result = "{self.name}, {self.age}"
@@ -830,13 +860,13 @@ macro serializable*(body: Ast) -> Ast:
 # Usage — macro is just called, block is its AST argument:
 serializable:
   type User:
-    name*: string
-    age*: int
+    @name*: string
+    @age*: int
 
 # Compiler expands to:
 # type User:
-#     name*: string
-#     age*: int
+#     @name*: string
+#     @age*: int
 # fn toJson*(self: User) -> string:
 #     ...
 ```
@@ -874,35 +904,35 @@ Behavior is determined by contents, not by different keywords.
 
 ```
 # Exit from nested loops
-block @search:
+block `search:
   for item in list1:
     for item2 in list2:
       if item == item2:
-        break @search         # exit both loops
+        break `search         # exit both loops
   echo("not found")
 
 # Nested named blocks
-block @outer:
+block `outer:
   for i in 0..100:
-    block @inner:
+    block `inner:
       if i == 50:
-        break @outer          # exit everything
+        break `outer          # exit everything
       if i % 2 == 0:
-        break @inner          # skip this block
+        break `inner          # skip this block
       process(i)
 ```
 
 ### Block as expression (returns a value)
 
 ```
-let count = block @b:
+let count = block `b:
   if users.isEmpty:
     result = 0
-    break @b
+    break `b
   result = users.len
 
 # Or simpler:
-let status = block @b:
+let status = block `b:
   result = if isReady: "ok" else: "waiting"
 ```
 
@@ -915,7 +945,7 @@ If data is passed to a `spawn`, no other spawn can access it mutably.
 var data = ~[1, 2, 3]
 
 # COMPILE ERROR — two spawns cannot mutate the same data:
-block @b:
+block `b:
   spawn:
     data.add(4)          # ERROR: mutable borrow conflict
   spawn:
@@ -923,14 +953,14 @@ block @b:
 
 # OK — communicate via channels instead of shared memory:
 let ch = channel[int](2)
-block @b:
+block `b:
   spawn:
     ch.send(4)
   spawn:
     ch.send(5)
 
 # OK — each spawn gets its own data:
-block @b:
+block `b:
   spawn:
     var local = ~[1, 2]
     local.add(3)
@@ -948,46 +978,46 @@ block @b:
 ### Structured Concurrency
 
 ```
-block @workers:
+block `workers:
   spawn: fetch("url1")
   spawn: fetch("url2")
 # <- all tasks guaranteed to be complete
 
 # spawn is available via block handle
-block @pipeline:
+block `pipeline:
   let ch = channel[string](10)
 
-  for url in urls @urls:
+  for url in urls `urls:
     spawn:
       let data = fetch(url) else:
-        break @urls
+        break `urls
       ch.send(data)
 
   for _ in urls:
-    block @recv:
+    block `recv:
       spawn:
         let val = ch.receive()
         if val:
           process(val.get())
-          break @recv
+          break `recv
       spawn:
         after(10.sec)
-        break @pipeline       # timeout — exit everything
+        break `pipeline       # timeout — exit everything
 ```
 
 ### Nested blocks for pipeline
 
 ```
-block @pipeline:
+block `pipeline:
   let raw = channel[bytes](100)
   let parsed = channel[Record](100)
 
-  block @producers:
+  block `producers:
     for url in urls:
       spawn:
         raw.send(fetch(url))
 
-  block @consumers:
+  block `consumers:
     for _ in urls:
       spawn:
         let data = raw.recv()
@@ -1049,21 +1079,21 @@ block:
 # <- all three complete
 
 # First to complete wins (like doOne/select) — break on success:
-block @race:
+block `race:
   spawn:
     let val = ch1.receive()
     if val:
       process(val.get())
-      break @race
+      break `race
   spawn:
     let val = ch2.receive()
     if val:
       process(val.get())
-      break @race
+      break `race
   spawn:
     after(5.sec)
     echo("Timeout!")
-    break @race
+    break `race
 ```
 
 ### No Colored Functions (no async/await)
@@ -1096,7 +1126,7 @@ let b = fetch("url2")?
 # Parallel — block spawn:
 var a: bytes
 var b: bytes
-block @w:
+block `w:
   spawn: a = fetch("url1")?
   spawn: b = fetch("url2")?
 # <- both complete, a and b available
@@ -1142,13 +1172,14 @@ fn loadApp*() -> App | !IoError | !ParseError:
 #### 2. `case` — handle all cases
 
 ```
-case readConfig("app.toml") as cfg:
+let cfg = readConfig("app.toml")
+case cfg:
   of ok:
-    start(cfg)
+    start(cfg.get())
   of error(IoError.notFound):
     createDefault()
-  of error as e:
-    quit(e)
+  of error:
+    quit(cfg)
 ```
 
 Exhaustiveness checking — compiler guarantees all variants are handled.
