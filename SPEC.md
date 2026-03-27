@@ -273,7 +273,7 @@ Every variable lives until the end of its scope (function or block).
 When the scope ends, the variable is destroyed. No GC, no reference counting.
 The compiler verifies all of this automatically.
 
-**When to use `block.alloc`:** only when you have cyclic references
+**When to use `Pool`:** only when you have cyclic references
 (A references B and B references A). Everything else is automatic.
 
 ### Ownership + Borrow Checker
@@ -308,7 +308,7 @@ fn normalize(own var data: slice[byte]) -> slice[byte]:  # own + mutate
 fn handle(request: Request) -> Response | !Error:
   let user = db.getUser(request.userId)?
   let posts = db.getPosts(user.id)?
-  result = Response.new(user, posts)
+  result = newResponse(user, posts)
 # <- user, posts, everything destroyed automatically
 
 fn process():
@@ -322,65 +322,88 @@ fn process():
 No lifetime annotations. No manual memory management.
 Compiler tracks scopes and verifies borrows automatically.
 
-### Cyclic References (block.alloc)
+### Cyclic References (Pool)
 
 The only case where you need explicit memory management:
 **A references B and B references A.** The borrow checker cannot handle
-cycles — use `block.alloc` to put cyclic data in a memory region.
+cycles — use `Pool` to put cyclic data in a memory region.
+
+`Pool` is a regular object created with `newPool()`. Freed automatically
+when it goes out of scope. All allocated data freed in O(1).
 
 ```
-# Cyclic references — need block.alloc:
+# Cyclic references — need Pool:
 fn buildDom() -> string:
-  block pool:
-    let parent = pool.alloc(Element("div"))
-    let child = pool.alloc(Element("span"))
-    parent.addChild(child)    # parent -> child
-    child.parent = parent      # child -> parent (cycle!)
-    result = parent.render().clone()
-  # <- pool destroyed, all memory freed in O(1)
+  let pool = newPool()
+  let parent = pool.alloc(Element("div"))
+  let child = pool.alloc(Element("span"))
+  parent.addChild(child)    # parent -> child
+  child.parent = parent      # child -> parent (cycle!)
+  result = parent.render().clone()
+# <- pool goes out of scope, all memory freed in O(1)
 
-# NOT cyclic — no block needed, just regular code:
+# NOT cyclic — no pool needed, just regular code:
 fn buildList() -> string:
-  let items = seq[Item].new()
+  let items = newSeq[Item]()
   items.add(Item("first"))
   items.add(Item("second"))     # items owns the data, no cycles
   result = items.toString()
 # <- items destroyed automatically
 ```
 
-#### block.alloc rules
+#### Pool rules
 
-1. One Block handle per function — a function accepts at most one `Block`
-2. Cross-block linking is forbidden — data from different blocks cannot reference each other
-3. Data from `block.alloc` cannot leave the block (use `.clone()` if needed)
-4. If block doesn't use `.alloc` — no allocator is created (zero overhead)
+1. Cross-pool linking is forbidden — data from different pools cannot reference each other
+2. Data from `pool.alloc` cannot outlive the pool (use `.clone()` if needed)
+3. A function can accept multiple Pool parameters
 
 Rationale: if two structures need to reference each other,
-they are by definition part of the same graph and live in one block.
-If not — they are independent and live in separate blocks.
+they are by definition part of the same graph and live in one pool.
+If not — they are independent and live in separate pools.
 
 ```
-# Caller owns the block, function receives the handle
-block pool:
-  let root = buildGraph(pool)   # function returns a reference
-  traverse(root)
-# <- everything freed
+# Create pool, build graph, use it, pass further
+let pool = newPool()
+let root = buildGraph(pool)
+traverse(root)
+printTree(root)
+# <- pool goes out of scope, all memory freed
 
-fn buildGraph(pool: Block) -> Node:
+fn buildGraph(pool: Pool) -> Node:
   let a = pool.alloc(Node("A"))
   let b = pool.alloc(Node("B"))
+  let c = pool.alloc(Node("C"))
   a.link(b)
-  b.link(a)
-  result = a                     # return reference to root
+  b.link(c)
+  c.link(a)         # cycle
+  result = a
 
-# Two independent graphs — two separate blocks
-block userPool:
-  let users = buildUserGraph(userPool)
-  processUsers(users)
+fn traverse(node: Node):
+  echo($node.name)
+  for child in node.children:
+    traverse(child)
 
-block rolePool:
-  let roles = buildRoleGraph(rolePool)
-  processRoles(roles)
+fn printTree(node: Node):
+  echo("Tree root: {node.name}")
+
+# Two independent graphs — two separate pools
+let userPool = newPool()
+let users = buildUserGraph(userPool)
+processUsers(users)
+
+let rolePool = newPool()
+let roles = buildRoleGraph(rolePool)
+processRoles(roles)
+
+# Multiple pools passed to one function
+fn mergeGraphs(src: Pool, dst: Pool) -> Node:
+  let srcRoot = buildGraph(src)
+  let dstRoot = buildGraph(dst)
+  # srcRoot and dstRoot cannot link to each other (cross-pool forbidden)
+  # but we can clone data from one to another:
+  let copy = srcRoot.clone()
+  dst.alloc(copy)
+  result = dstRoot
 ```
 
 ## Collections
@@ -519,7 +542,7 @@ let name = getUser(1)?.name  # none if user not found
   - Short (<=23 bytes) → inline SSO (stack)
   - Long (>23 bytes) → heap, single owner
 - Passing: borrow by default (zero cost)
-- `StrBuf` — mutable buffer for building strings
+- `StringBuf` — mutable buffer for building strings
 - Interpolation: `"hello {name}"`
 
 ```
@@ -530,7 +553,7 @@ let big = readFile("big.txt")        # heap, single owner
 fn greet(s: string):                  # immutable borrow, zero cost
   echo(s)
 
-let buf = StrBuf.new()
+let buf = newStringBuf()
 buf.add("part1")
 buf.add("part2")
 let result = buf.toString()          # final immutable string
@@ -734,7 +757,7 @@ macro serializable*(body: Ast) -> Ast:
   let typeName = body.name
   body.addFn:
     fn toJson*(self) -> string:
-      var buf = StrBuf.new()
+      var buf = newStringBuf()
       buf.add("{")
       for i, field in body.fields:
         if i > 0: buf.add(", ")
@@ -868,31 +891,6 @@ block pipeline:
   # producers done -> consumers done -> pipeline done
 ```
 
-### Memory Regions (block.alloc)
-
-```
-block pool:
-  let a = pool.alloc(Node("A"))
-  let b = pool.alloc(Node("B"))
-  a.link(b)
-  b.link(a)                    # cycle — OK, same region
-# <- all memory freed in O(1)
-
-# Data cannot leave the block:
-block pool:
-  let node = pool.alloc(Node("A"))
-  node                         # ERROR: node is bound to pool
-
-# Combined with concurrency:
-block ctx:
-  let graph = ctx.alloc(Graph.new())
-  ctx.spawn: traverse(graph)
-  ctx.spawn: validate(graph)
-# <- tasks complete, memory freed
-
-# Without .alloc — regular block, zero overhead
-```
-
 ### detach — for long-lived tasks (outside block)
 
 `detach` is the opposite of `block`. Launches a task that lives independently of the current scope.
@@ -991,7 +989,7 @@ fn divide*(a: int, b: int) -> int | !MathError:
 ```
 fn loadApp*() -> App | !IoError | !ParseError:
   let cfg = readConfig("app.toml")?   # error propagated
-  result = App.new(cfg)
+  result = newApp(cfg)
 ```
 
 #### 2. `match` — handle all cases
