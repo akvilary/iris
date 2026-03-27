@@ -3,28 +3,55 @@ mod lexer;
 mod ast;
 mod parser;
 mod codegen;
+mod error;
 
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
+use codegen::CodeGen;
+use error::CompileResult;
 use lexer::Lexer;
 use parser::Parser;
-use codegen::CodeGen;
 
-fn compile(source: &str, filename: &str) -> String {
+fn compile_to_ast(source: &str) -> CompileResult<Vec<ast::Stmt>> {
     let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize();
+    let tokens = lexer.tokenize()?;
     let mut parser = Parser::new(tokens);
-    let stmts = parser.parse();
+    parser.parse()
+}
+
+fn compile_to_c(source: &str) -> CompileResult<String> {
+    let stmts = compile_to_ast(source)?;
     let mut codegen = CodeGen::new();
-    let c_code = codegen.generate(&stmts);
+    Ok(codegen.generate(&stmts))
+}
 
-    // Write C file
-    let c_filename = filename.replace(".is", ".c");
-    fs::write(&c_filename, &c_code).expect("Failed to write C file");
+fn build_binary(source: &str, input: &Path) -> CompileResult<String> {
+    let c_code = compile_to_c(source)?;
+    let c_path = input.with_extension("c");
+    let bin_path = input.with_extension("");
 
-    c_filename
+    fs::write(&c_path, &c_code).map_err(|e| {
+        error::CompileError::new(format!("cannot write {}: {}", c_path.display(), e), 0, 0)
+    })?;
+
+    let status = Command::new("cc")
+        .args([
+            c_path.to_str().unwrap(),
+            "-o", bin_path.to_str().unwrap(),
+        ])
+        .status()
+        .map_err(|e| error::CompileError::new(format!("cannot run cc: {}", e), 0, 0))?;
+
+    let _ = fs::remove_file(&c_path);
+
+    if !status.success() {
+        return Err(error::CompileError::new("C compilation failed", 0, 0));
+    }
+
+    Ok(bin_path.to_str().unwrap().to_string())
 }
 
 fn main() {
@@ -38,89 +65,67 @@ fn main() {
 
     let command = &args[1];
     let filename = &args[2];
+    let path = Path::new(filename);
 
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error reading {}: {}", filename, e);
+            eprintln!("error: cannot read {}: {}", filename, e);
             std::process::exit(1);
         }
     };
 
-    match command.as_str() {
+    let result = match command.as_str() {
         "tokens" => {
             let mut lexer = Lexer::new(&source);
-            let tokens = lexer.tokenize();
-            for tok in &tokens {
-                println!("{:4}:{:<3} {:?}", tok.line, tok.col, tok.kind);
+            match lexer.tokenize() {
+                Ok(tokens) => {
+                    for tok in &tokens {
+                        println!("{:4}:{:<3} {:?}", tok.line, tok.col, tok.kind);
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e),
             }
         }
         "parse" => {
-            let mut lexer = Lexer::new(&source);
-            let tokens = lexer.tokenize();
-            let mut parser = Parser::new(tokens);
-            let stmts = parser.parse();
-            for stmt in &stmts {
-                println!("{:#?}", stmt);
-            }
+            compile_to_ast(&source).map(|stmts| {
+                for stmt in &stmts {
+                    println!("{:#?}", stmt);
+                }
+            })
         }
         "emit" => {
-            let mut lexer = Lexer::new(&source);
-            let tokens = lexer.tokenize();
-            let mut parser = Parser::new(tokens);
-            let stmts = parser.parse();
-            let mut codegen = CodeGen::new();
-            let c_code = codegen.generate(&stmts);
-            println!("{}", c_code);
+            compile_to_c(&source).map(|c_code| print!("{}", c_code))
         }
         "build" => {
-            let c_filename = compile(&source, filename);
-            let out_filename = filename.replace(".is", "");
-
-            let status = Command::new("cc")
-                .args([&c_filename, "-o", &out_filename])
-                .status()
-                .expect("Failed to run C compiler");
-
-            if !status.success() {
-                eprintln!("C compilation failed");
-                std::process::exit(1);
-            }
-
-            // Clean up C file
-            let _ = fs::remove_file(&c_filename);
-            println!("Built: {}", out_filename);
+            build_binary(&source, path).map(|bin| println!("Built: {}", bin))
         }
         "run" => {
-            let c_filename = compile(&source, filename);
-            let out_filename = filename.replace(".is", "");
-
-            let status = Command::new("cc")
-                .args([&c_filename, "-o", &out_filename])
-                .status()
-                .expect("Failed to run C compiler");
-
-            if !status.success() {
-                eprintln!("C compilation failed");
-                std::process::exit(1);
+            match build_binary(&source, path) {
+                Ok(bin) => {
+                    let status = Command::new(&bin)
+                        .status()
+                        .map_err(|e| error::CompileError::new(
+                            format!("cannot run {}: {}", bin, e), 0, 0,
+                        ));
+                    let _ = fs::remove_file(&bin);
+                    match status {
+                        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
             }
-
-            // Clean up C file
-            let _ = fs::remove_file(&c_filename);
-
-            // Run the binary
-            let status = Command::new(&format!("./{}", out_filename))
-                .status()
-                .expect("Failed to run binary");
-
-            // Clean up binary
-            let _ = fs::remove_file(&out_filename);
-
-            std::process::exit(status.code().unwrap_or(1));
         }
         _ => {
             eprintln!("Unknown command: {}", command);
             std::process::exit(1);
         }
+    };
+
+    if let Err(e) = result {
+        eprintln!("{}", e);
+        std::process::exit(1);
     }
 }

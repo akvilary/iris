@@ -1,4 +1,5 @@
-use crate::token::{Token, TokenKind, keyword_or_ident};
+use crate::error::{CompileError, CompileResult};
+use crate::token::{Token, TokenKind};
 
 pub struct Lexer {
     source: Vec<char>,
@@ -6,8 +7,9 @@ pub struct Lexer {
     line: usize,
     col: usize,
     indent_stack: Vec<usize>,
-    pending_tokens: Vec<Token>,
+    pending: Vec<Token>,
     at_line_start: bool,
+    errors: Vec<CompileError>,
 }
 
 impl Lexer {
@@ -18,10 +20,68 @@ impl Lexer {
             line: 1,
             col: 1,
             indent_stack: vec![0],
-            pending_tokens: Vec::new(),
+            pending: Vec::new(),
             at_line_start: true,
+            errors: Vec::new(),
         }
     }
+
+    pub fn tokenize(&mut self) -> CompileResult<Vec<Token>> {
+        let mut tokens = Vec::new();
+
+        while self.pos < self.source.len() {
+            tokens.extend(self.pending.drain(..));
+
+            if self.at_line_start {
+                self.at_line_start = false;
+                self.handle_indentation();
+                tokens.extend(self.pending.drain(..));
+                continue;
+            }
+
+            let Some(ch) = self.peek() else { break };
+
+            match ch {
+                '\n' => {
+                    tokens.push(self.make_token(TokenKind::Newline));
+                    self.advance();
+                    self.at_line_start = true;
+                }
+                ' ' | '\t' | '\r' => { self.advance(); }
+                '#' => self.skip_comment(),
+                '"' => tokens.extend(self.read_string()),
+                '\'' => tokens.push(self.read_rune()),
+                '`' => tokens.push(self.read_label()),
+                '0'..='9' => tokens.push(self.read_number()),
+                _ if ch.is_alphabetic() || ch == '_' => tokens.push(self.read_identifier()),
+                _ => {
+                    if let Some(tok) = self.read_operator() {
+                        tokens.push(tok);
+                    } else {
+                        self.errors.push(CompileError::new(
+                            format!("unexpected character '{}'", ch),
+                            self.line, self.col,
+                        ));
+                        self.advance();
+                    }
+                }
+            }
+        }
+
+        // Emit remaining dedents
+        while self.indent_stack.len() > 1 {
+            self.indent_stack.pop();
+            tokens.push(Token::new(TokenKind::Dedent, self.line, self.col));
+        }
+        tokens.push(Token::new(TokenKind::Eof, self.line, self.col));
+
+        if !self.errors.is_empty() {
+            return Err(self.errors[0].clone());
+        }
+        Ok(tokens)
+    }
+
+    // ── Character access ──
 
     fn peek(&self) -> Option<char> {
         self.source.get(self.pos).copied()
@@ -32,78 +92,74 @@ impl Lexer {
     }
 
     fn advance(&mut self) -> Option<char> {
-        let ch = self.source.get(self.pos).copied();
-        if let Some(c) = ch {
-            self.pos += 1;
-            if c == '\n' {
-                self.line += 1;
-                self.col = 1;
-            } else {
-                self.col += 1;
-            }
+        let ch = self.source.get(self.pos).copied()?;
+        self.pos += 1;
+        if ch == '\n' {
+            self.line += 1;
+            self.col = 1;
+        } else {
+            self.col += 1;
         }
-        ch
+        Some(ch)
     }
 
-    fn skip_comment(&mut self) {
-        while let Some(ch) = self.peek() {
-            if ch == '\n' {
-                break;
-            }
-            self.advance();
-        }
+    fn make_token(&self, kind: TokenKind) -> Token {
+        Token::new(kind, self.line, self.col)
     }
+
+    // ── Indentation ──
 
     fn handle_indentation(&mut self) {
         let mut spaces = 0;
-        while let Some(' ') = self.peek() {
+        while self.peek() == Some(' ') {
             self.advance();
             spaces += 1;
         }
 
         // Skip blank lines and comment-only lines
-        if let Some(ch) = self.peek() {
-            if ch == '\n' || ch == '#' {
-                return;
-            }
-        } else {
-            return;
+        match self.peek() {
+            Some('\n') | Some('#') | None => return,
+            _ => {}
         }
 
-        let current_indent = *self.indent_stack.last().unwrap();
+        let current = self.current_indent();
 
-        if spaces > current_indent {
+        if spaces > current {
             self.indent_stack.push(spaces);
-            self.pending_tokens.push(Token::new(
-                TokenKind::Indent,
-                self.line,
-                self.col,
-            ));
-        } else if spaces < current_indent {
-            while *self.indent_stack.last().unwrap() > spaces {
+            self.pending.push(Token::new(TokenKind::Indent, self.line, self.col));
+        } else if spaces < current {
+            while self.current_indent() > spaces {
                 self.indent_stack.pop();
-                self.pending_tokens.push(Token::new(
-                    TokenKind::Dedent,
-                    self.line,
-                    self.col,
+                self.pending.push(Token::new(TokenKind::Dedent, self.line, self.col));
+            }
+            if self.current_indent() != spaces {
+                self.errors.push(CompileError::new(
+                    "inconsistent indentation",
+                    self.line, self.col,
                 ));
             }
-            if *self.indent_stack.last().unwrap() != spaces {
-                self.pending_tokens.push(Token::new(
-                    TokenKind::Ident("IndentationError".to_string()),
-                    self.line,
-                    self.col,
-                ));
-            }
+        }
+    }
+
+    fn current_indent(&self) -> usize {
+        self.indent_stack.last().copied().unwrap_or(0)
+    }
+
+    // ── Readers ──
+
+    fn skip_comment(&mut self) {
+        while let Some(ch) = self.peek() {
+            if ch == '\n' { break; }
+            self.advance();
         }
     }
 
     fn read_string(&mut self) -> Vec<Token> {
         let start_line = self.line;
         let start_col = self.col;
-        self.advance(); // skip opening "
+        self.advance(); // skip "
 
-        let mut current = String::new();
+        let mut buf = String::new();
         let mut tokens = Vec::new();
         let mut has_interp = false;
 
@@ -112,17 +168,9 @@ impl Lexer {
                 '"' => {
                     self.advance();
                     if has_interp {
-                        tokens.push(Token::new(
-                            TokenKind::StringInterpEnd(current),
-                            self.line,
-                            self.col,
-                        ));
+                        tokens.push(Token::new(TokenKind::StringInterpEnd(buf), self.line, self.col));
                     } else {
-                        tokens.push(Token::new(
-                            TokenKind::StringLit(current),
-                            start_line,
-                            start_col,
-                        ));
+                        tokens.push(Token::new(TokenKind::StringLit(buf), start_line, start_col));
                     }
                     return tokens;
                 }
@@ -130,93 +178,79 @@ impl Lexer {
                     self.advance();
                     if !has_interp {
                         has_interp = true;
-                        tokens.push(Token::new(
-                            TokenKind::StringInterpStart,
-                            start_line,
-                            start_col,
-                        ));
+                        tokens.push(Token::new(TokenKind::StringInterpStart, start_line, start_col));
                     }
-                    tokens.push(Token::new(
-                        TokenKind::StringLit(current.clone()),
-                        self.line,
-                        self.col,
-                    ));
-                    current.clear();
+                    tokens.push(Token::new(TokenKind::StringLit(buf.clone()), self.line, self.col));
+                    buf.clear();
 
-                    // Read expression tokens until }
+                    // Read expression inside {} as identifier
+                    let mut expr = String::new();
                     let mut depth = 1;
-                    let mut expr_str = String::new();
                     while let Some(c) = self.peek() {
-                        if c == '}' {
-                            depth -= 1;
-                            if depth == 0 {
-                                self.advance();
-                                break;
-                            }
-                        } else if c == '{' {
-                            depth += 1;
-                        }
-                        expr_str.push(c);
+                        if c == '}' { depth -= 1; if depth == 0 { self.advance(); break; } }
+                        if c == '{' { depth += 1; }
+                        expr.push(c);
                         self.advance();
                     }
-                    tokens.push(Token::new(
-                        TokenKind::Ident(expr_str),
-                        self.line,
-                        self.col,
-                    ));
+                    tokens.push(Token::new(TokenKind::Ident(expr), self.line, self.col));
                 }
                 '\\' => {
                     self.advance();
-                    match self.peek() {
-                        Some('n') => { self.advance(); current.push('\n'); }
-                        Some('t') => { self.advance(); current.push('\t'); }
-                        Some('\\') => { self.advance(); current.push('\\'); }
-                        Some('"') => { self.advance(); current.push('"'); }
-                        Some('{') => { self.advance(); current.push('{'); }
-                        _ => current.push('\\'),
-                    }
+                    buf.push(match self.peek() {
+                        Some('n') => { self.advance(); '\n' }
+                        Some('t') => { self.advance(); '\t' }
+                        Some('\\') => { self.advance(); '\\' }
+                        Some('"') => { self.advance(); '"' }
+                        Some('{') => { self.advance(); '{' }
+                        _ => '\\',
+                    });
                 }
                 '\n' => {
+                    self.errors.push(CompileError::new(
+                        "unterminated string literal",
+                        start_line, start_col,
+                    ));
                     break;
                 }
-                _ => {
-                    self.advance();
-                    current.push(ch);
-                }
+                _ => { self.advance(); buf.push(ch); }
             }
         }
 
-        tokens.push(Token::new(
-            TokenKind::StringLit(current),
-            start_line,
-            start_col,
-        ));
+        tokens.push(Token::new(TokenKind::StringLit(buf), start_line, start_col));
         tokens
     }
 
     fn read_rune(&mut self) -> Token {
         let start_line = self.line;
         let start_col = self.col;
-        self.advance(); // skip opening '
+        self.advance(); // skip '
 
-        let ch = if let Some('\\') = self.peek() {
-            self.advance();
-            match self.peek() {
-                Some('n') => { self.advance(); '\n' }
-                Some('t') => { self.advance(); '\t' }
-                Some('\\') => { self.advance(); '\\' }
-                Some('\'') => { self.advance(); '\'' }
-                _ => '\\',
+        let ch = match self.peek() {
+            Some('\\') => {
+                self.advance();
+                match self.advance() {
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('\\') => '\\',
+                    Some('\'') => '\'',
+                    _ => '\\',
+                }
             }
-        } else if let Some(c) = self.advance() {
-            c
-        } else {
-            '\0'
+            Some(c) => { self.advance(); c }
+            None => {
+                self.errors.push(CompileError::new(
+                    "unterminated rune literal", start_line, start_col,
+                ));
+                '\0'
+            }
         };
 
-        // skip closing '
-        if let Some('\'') = self.peek() {
+        if self.peek() == Some('\'') {
             self.advance();
+        } else {
+            self.errors.push(CompileError::new(
+                "unterminated rune literal", start_line, start_col,
+            ));
         }
 
         Token::new(TokenKind::RuneLit(ch), start_line, start_col)
@@ -229,39 +263,49 @@ impl Lexer {
         let mut is_float = false;
 
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() || ch == '_' {
-                if ch != '_' {
-                    num.push(ch);
-                }
-                self.advance();
-            } else if ch == '.' && !is_float {
-                if let Some(next) = self.peek_next() {
-                    if next == '.' {
-                        // This is `..` range operator, not a decimal point
-                        break;
-                    }
-                    if next.is_ascii_digit() {
+            match ch {
+                '0'..='9' => { num.push(ch); self.advance(); }
+                '_' => { self.advance(); } // digit separator, skip
+                '.' if !is_float => {
+                    // Check for range operator (..)
+                    if self.peek_next() == Some('.') { break; }
+                    if self.peek_next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
                         is_float = true;
                         num.push('.');
                         self.advance();
                     } else {
                         break;
                     }
-                } else {
-                    break;
                 }
-            } else {
-                break;
+                _ => break,
             }
         }
 
-        if is_float {
-            let val: f64 = num.parse().unwrap_or(0.0);
-            Token::new(TokenKind::FloatLit(val), start_line, start_col)
+        let kind = if is_float {
+            match num.parse::<f64>() {
+                Ok(val) => TokenKind::FloatLit(val),
+                Err(_) => {
+                    self.errors.push(CompileError::new(
+                        format!("invalid float literal '{}'", num),
+                        start_line, start_col,
+                    ));
+                    TokenKind::FloatLit(0.0)
+                }
+            }
         } else {
-            let val: i64 = num.parse().unwrap_or(0);
-            Token::new(TokenKind::IntLit(val), start_line, start_col)
-        }
+            match num.parse::<i64>() {
+                Ok(val) => TokenKind::IntLit(val),
+                Err(_) => {
+                    self.errors.push(CompileError::new(
+                        format!("integer literal '{}' is too large", num),
+                        start_line, start_col,
+                    ));
+                    TokenKind::IntLit(0)
+                }
+            }
+        };
+
+        Token::new(kind, start_line, start_col)
     }
 
     fn read_identifier(&mut self) -> Token {
@@ -278,8 +322,7 @@ impl Lexer {
             }
         }
 
-        let kind = keyword_or_ident(&word);
-        Token::new(kind, start_line, start_col)
+        Token::new(TokenKind::from_keyword(&word), start_line, start_col)
     }
 
     fn read_label(&mut self) -> Token {
@@ -297,254 +340,74 @@ impl Lexer {
             }
         }
 
+        if name.is_empty() {
+            self.errors.push(CompileError::new(
+                "empty label", start_line, start_col,
+            ));
+        }
+
         Token::new(TokenKind::Label(name), start_line, start_col)
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
-        let mut tokens = Vec::new();
+    fn read_operator(&mut self) -> Option<Token> {
+        let line = self.line;
+        let col = self.col;
 
-        while self.pos < self.source.len() {
-            // Drain pending indent/dedent tokens
-            if !self.pending_tokens.is_empty() {
-                tokens.append(&mut self.pending_tokens);
+        let kind = match self.peek()? {
+            '+' => { self.advance(); TokenKind::Plus }
+            '-' => {
+                self.advance();
+                if self.peek() == Some('>') { self.advance(); TokenKind::Arrow }
+                else { TokenKind::Minus }
             }
-
-            // Handle line start (indentation)
-            if self.at_line_start {
-                self.at_line_start = false;
-                self.handle_indentation();
-                if !self.pending_tokens.is_empty() {
-                    tokens.append(&mut self.pending_tokens);
-                }
-                continue;
+            '*' => { self.advance(); TokenKind::Star }
+            '/' => { self.advance(); TokenKind::Slash }
+            '%' => { self.advance(); TokenKind::Percent }
+            '=' => {
+                self.advance();
+                if self.peek() == Some('=') { self.advance(); TokenKind::EqEq }
+                else { TokenKind::Eq }
             }
-
-            let ch = match self.peek() {
-                Some(c) => c,
-                None => break,
-            };
-
-            match ch {
-                '\n' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Newline, line, col));
-                    self.at_line_start = true;
-                }
-                ' ' | '\t' | '\r' => {
-                    self.advance();
-                }
-                '#' => {
-                    self.skip_comment();
-                }
-                '"' => {
-                    tokens.extend(self.read_string());
-                }
-                '\'' => {
-                    tokens.push(self.read_rune());
-                }
-                '`' => {
-                    tokens.push(self.read_label());
-                }
-                '0'..='9' => {
-                    tokens.push(self.read_number());
-                }
-                '+' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Plus, line, col));
-                }
-                '-' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('>') {
-                        self.advance();
-                        tokens.push(Token::new(TokenKind::Arrow, line, col));
-                    } else {
-                        tokens.push(Token::new(TokenKind::Minus, line, col));
-                    }
-                }
-                '*' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Star, line, col));
-                }
-                '/' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Slash, line, col));
-                }
-                '%' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Percent, line, col));
-                }
-                '=' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('=') {
-                        self.advance();
-                        tokens.push(Token::new(TokenKind::EqEq, line, col));
-                    } else {
-                        tokens.push(Token::new(TokenKind::Eq, line, col));
-                    }
-                }
-                '!' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('=') {
-                        self.advance();
-                        tokens.push(Token::new(TokenKind::NotEq, line, col));
-                    } else {
-                        tokens.push(Token::new(TokenKind::Bang, line, col));
-                    }
-                }
-                '<' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('=') {
-                        self.advance();
-                        tokens.push(Token::new(TokenKind::LessEq, line, col));
-                    } else {
-                        tokens.push(Token::new(TokenKind::Less, line, col));
-                    }
-                }
-                '>' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('=') {
-                        self.advance();
-                        tokens.push(Token::new(TokenKind::GreaterEq, line, col));
-                    } else {
-                        tokens.push(Token::new(TokenKind::Greater, line, col));
-                    }
-                }
-                '.' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    if self.peek() == Some('.') {
-                        self.advance();
-                        if self.peek() == Some('<') {
-                            self.advance();
-                            tokens.push(Token::new(TokenKind::DotDotLess, line, col));
-                        } else {
-                            tokens.push(Token::new(TokenKind::DotDot, line, col));
-                        }
-                    } else {
-                        tokens.push(Token::new(TokenKind::Dot, line, col));
-                    }
-                }
-                ':' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Colon, line, col));
-                }
-                ',' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Comma, line, col));
-                }
-                '|' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Pipe, line, col));
-                }
-                '?' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Question, line, col));
-                }
-                '@' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::At, line, col));
-                }
-                '$' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Dollar, line, col));
-                }
-                '~' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Tilde, line, col));
-                }
-                '&' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::Ampersand, line, col));
-                }
-                '(' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::LParen, line, col));
-                }
-                ')' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::RParen, line, col));
-                }
-                '[' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::LBracket, line, col));
-                }
-                ']' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::RBracket, line, col));
-                }
-                '{' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::LBrace, line, col));
-                }
-                '}' => {
-                    let line = self.line;
-                    let col = self.col;
-                    self.advance();
-                    tokens.push(Token::new(TokenKind::RBrace, line, col));
-                }
-                _ if ch.is_alphabetic() || ch == '_' => {
-                    tokens.push(self.read_identifier());
-                }
-                _ => {
-                    self.advance(); // skip unknown
-                }
+            '!' => {
+                self.advance();
+                if self.peek() == Some('=') { self.advance(); TokenKind::NotEq }
+                else { TokenKind::Bang }
             }
-        }
+            '<' => {
+                self.advance();
+                if self.peek() == Some('=') { self.advance(); TokenKind::LessEq }
+                else { TokenKind::Less }
+            }
+            '>' => {
+                self.advance();
+                if self.peek() == Some('=') { self.advance(); TokenKind::GreaterEq }
+                else { TokenKind::Greater }
+            }
+            '.' => {
+                self.advance();
+                if self.peek() == Some('.') {
+                    self.advance();
+                    if self.peek() == Some('<') { self.advance(); TokenKind::DotDotLess }
+                    else { TokenKind::DotDot }
+                } else { TokenKind::Dot }
+            }
+            ':' => { self.advance(); TokenKind::Colon }
+            ',' => { self.advance(); TokenKind::Comma }
+            '|' => { self.advance(); TokenKind::Pipe }
+            '?' => { self.advance(); TokenKind::Question }
+            '@' => { self.advance(); TokenKind::At }
+            '$' => { self.advance(); TokenKind::Dollar }
+            '~' => { self.advance(); TokenKind::Tilde }
+            '&' => { self.advance(); TokenKind::Ampersand }
+            '(' => { self.advance(); TokenKind::LParen }
+            ')' => { self.advance(); TokenKind::RParen }
+            '[' => { self.advance(); TokenKind::LBracket }
+            ']' => { self.advance(); TokenKind::RBracket }
+            '{' => { self.advance(); TokenKind::LBrace }
+            '}' => { self.advance(); TokenKind::RBrace }
+            _ => return None,
+        };
 
-        // Emit remaining dedents at EOF
-        while self.indent_stack.len() > 1 {
-            self.indent_stack.pop();
-            tokens.push(Token::new(TokenKind::Dedent, self.line, self.col));
-        }
-
-        tokens.push(Token::new(TokenKind::Eof, self.line, self.col));
-        tokens
+        Some(Token::new(kind, line, col))
     }
 }
