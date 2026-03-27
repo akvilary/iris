@@ -510,7 +510,7 @@ block workers:
 
 # spawn доступен через handle блока
 block pipeline:
-    let ch = chan[string](10)
+    let ch = channel[string](10)
 
     for url in urls:
         pipeline.spawn:
@@ -530,8 +530,8 @@ block pipeline:
 
 ```
 block pipeline:
-    let raw = chan[bytes](100)
-    let parsed = chan[Record](100)
+    let raw = channel[bytes](100)
+    let parsed = channel[Record](100)
 
     block producers:
         for url in urls:
@@ -571,11 +571,13 @@ block ctx:
 # Без .alloc — обычный block, zero overhead
 ```
 
-### task.detach — для long-lived задач (вне block)
+### detach — для long-lived задач (вне block)
+
+`detach` — антипод `block`. Запускает задачу, живущую независимо от текущего scope.
 
 ```
 # Для демонов/серверов — явный unstructured spawn (редко)
-let server = task.detach:
+let server = detach:
     listen(8080)
 # продолжаем выполнение, сервер крутится в фоне
 server.cancel()       # явная остановка
@@ -584,7 +586,7 @@ server.cancel()       # явная остановка
 ### Channels + Select
 
 ```
-let ch = chan[int](10)
+let ch = channel[int](10)
 
 block:
     b.spawn:
