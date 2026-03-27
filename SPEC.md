@@ -75,6 +75,29 @@ while true as outer:
       continue inner     # skip to next for iteration
 ```
 
+## Expressions
+
+`if`/`elif`/`else` and `match` are expressions — they return values:
+
+```
+# Inline if:
+let x = if condition: "yes" else: "no"
+
+# Multiline if:
+let status = if code == 200:
+  "ok"
+elif code == 404:
+  "not found"
+else:
+  "error"
+
+# match as expression:
+let name = match color:
+  Color.red: "Red"
+  Color.green: "Green"
+  Color.blue: "Blue"
+```
+
 ## Truthiness
 
 `if x` only works on `bool`, `Option[T]`, and `Result[T, E]`.
