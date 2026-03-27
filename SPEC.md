@@ -903,10 +903,14 @@ block pipeline:
       ch.send(data)
 
   for _ in urls:
-    select:
-      val from ch:
-        process(val)
-      after 10.sec:
+    block recv:
+      spawn:
+        let val = ch.receive()
+        if val:
+          process(val.get())
+          break recv
+      spawn:
+        after(10.sec)
         break pipeline       # timeout — exit everything
 ```
 
@@ -942,7 +946,7 @@ let server = detach:
 server.cancel()       # explicit stop
 ```
 
-### Channels + Select
+### Channels
 
 Channels transfer ownership — sender loses access, no shared mutable state.
 Primitive types (int, float, bool) are copied. Complex types are moved.
@@ -960,19 +964,6 @@ let ch = channel[int](0)
 # Explicit receive:
 let val = ch.receive()      # blocks until value available
 
-# select — multiple channels, timeouts:
-block b:
-  b.spawn:
-    ch.send(42)
-
-while true:
-  select:
-    val from ch:
-      echo("Got: {val}")
-    after 5.sec:
-      echo("Timeout!")
-      break
-
 # Ownership transfer — sender loses access:
 let ch = channel[seq[int]](1)
 var data = @[1, 2, 3]
@@ -982,6 +973,36 @@ ch.send(data)           # data MOVED into channel
 # To send and keep — explicit clone:
 ch.send(data.clone())   # send a copy
 echo(data)              # OK — original still available
+```
+
+### Concurrency patterns via block
+
+`block` with `spawn` covers all concurrency patterns — no special keywords needed.
+
+```
+# Wait for all (like doAll) — block waits for every spawn:
+block:
+  spawn: loadUsers()
+  spawn: loadPosts()
+  spawn: loadConfig()
+# <- all three complete
+
+# First to complete wins (like doOne/select) — break on success:
+block race:
+  spawn:
+    let val = ch1.receive()
+    if val:
+      process(val.get())
+      break race
+  spawn:
+    let val = ch2.receive()
+    if val:
+      process(val.get())
+      break race
+  spawn:
+    after(5.sec)
+    echo("Timeout!")
+    break race
 ```
 
 ### No Colored Functions (no async/await)
