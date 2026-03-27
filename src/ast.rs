@@ -1,4 +1,5 @@
-/// AST nodes for the Iris language
+// AST nodes for the Iris language
+#![allow(dead_code)]
 
 #[derive(Debug, Clone)]
 pub enum Expr {
