@@ -269,6 +269,27 @@ export myLib.internal.parser
 
 ## Functions
 
+### Named Arguments
+
+Arguments can be passed by name. Order doesn't matter for named arguments:
+
+```
+fn createUser*(name: string, age: int) -> User:
+  result = User(@name: name, @age: age)
+
+# Positional (by order):
+let u = createUser("Alice", 30)
+
+# Named (order doesn't matter):
+let u = createUser(name: "Alice", age: 30)
+let u = createUser(age: 30, name: "Alice")
+
+# Mixed — positional first, then named:
+let u = createUser("Alice", age: 30)
+```
+
+###
+
 ```
 fn funcName*(param1: Type1, param2: Type2) -> ReturnType | !ErrorType:
   ...
@@ -522,6 +543,44 @@ sum(fixed)      # OK — slice into stack array
 sum(dynamic)    # OK — slice into seq
 ```
 
+### HashTable
+
+Inline hash table literal with `{key: value}`:
+
+```
+# Create hash table:
+let headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
+
+# Type: HashTable[string, string]
+let scores: HashTable[string, int] = {"alice": 100, "bob": 85}
+
+# Access:
+echo(headers["Content-Type"])
+
+# Empty:
+let empty = HashTable[string, int]()
+```
+
+### HashSet
+
+Inline hash set literal with `{values}`:
+
+```
+let ids = {1, 2, 3, 4}
+# Type: HashSet[int]
+
+let names = {"Alice", "Bob", "Charlie"}
+# Type: HashSet[string]
+
+if 2 in ids:
+  echo("found")
+
+# Empty:
+let empty = HashSet[int]()
+```
+
+Compiler distinguishes by syntax: `{k: v}` → HashTable, `{v}` → HashSet.
+
 ### Tuples
 
 Named and unnamed tuples for lightweight data grouping:
@@ -634,7 +693,7 @@ let emoji: rune = '🎉'
   - Long (>23 bytes) → heap, single owner
 - Passing: borrow by default (zero cost)
 - `StringBuf` — mutable buffer for building strings
-- Interpolation: `"hello {name}"`
+- Interpolation: `"hello {name}"` — built into lexer (not a macro), works everywhere
 
 ```
 let name = "Alice"                    # static memory
@@ -649,6 +708,11 @@ buf.add("part1")
 buf.add("part2")
 let result = buf.toString()          # final immutable string
 ```
+
+String interpolation is processed at the **lexer level**, not as a macro.
+`"hello {name}"` is transformed into `concat("hello ", $name)` before
+any macro expansion. This guarantees interpolation works inside templates,
+macros, and any other context.
 
 ## Type System
 
@@ -813,9 +877,8 @@ they operate on AST at compile-time. Three levels from simple to powerful.
 ### Principles
 
 - Written in Iris itself (not a separate language)
-- Operate on AST at compile-time
+- Operate on **untyped AST** (before type checking) — avoids phase ordering problems
 - Hygienic (no accidental name collisions)
-- Type-safe where possible
 - Debuggable (`iris expand` shows macro output)
 - Applied by calling the macro directly (like Nim), no special decorator syntax
 - Visibility via `*` (like everything else in Iris)
@@ -1212,3 +1275,88 @@ let cfg = readConfig("app.toml") else:
 - C (primary, first)
 - C++ (later)
 - JavaScript (later)
+
+## Roadmap
+
+### Phase 1 — MVP Compiler
+
+Minimal compiler that can compile basic Iris programs to C.
+
+- [ ] Lexer (tokenization, string interpolation)
+- [ ] Parser (indentation-based, AST construction)
+- [ ] Basic types: int, float, bool, string, byte, rune
+- [ ] Variables: const, let, var
+- [ ] Functions: fn, result, return
+- [ ] Control flow: if/elif/else, while, for, break, continue
+- [ ] Ranges: `..` and `..<`
+- [ ] Labels: `` `label ``
+- [ ] C code generation
+- [ ] `iris build` and `iris run`
+
+### Phase 2 — Type System
+
+- [ ] Custom types with `@` attributes
+- [ ] Enum (simple + with data)
+- [ ] Option[T]: some, none
+- [ ] Result unions: `T | !E`
+- [ ] case/of with exhaustiveness checking
+- [ ] Tuples (named + unnamed, destructuring)
+- [ ] Generics (duck typing at instantiation)
+- [ ] Concepts (optional named constraints)
+- [ ] `$` operator for string conversion
+
+### Phase 3 — Memory Safety
+
+- [ ] Ownership + borrow checker (immutable borrow, var, own, own var)
+- [ ] Lifetime inference (3 rules, no annotations)
+- [ ] Pool for cyclic references
+- [ ] Compile-time verification of borrows
+
+### Phase 4 — Collections + Strings
+
+- [ ] array[T, N] (stack)
+- [ ] seq[T] (heap), `~[...]` literal
+- [ ] slice[T] (view)
+- [ ] string (immutable, SSO, interpolation in lexer)
+- [ ] StringBuf (mutable builder)
+
+### Phase 5 — Concurrency
+
+- [ ] block (control flow, expressions, scoping)
+- [ ] spawn (thread pool)
+- [ ] channel[T] (buffered, unbuffered)
+- [ ] Thread safety (borrow checker prevents data races)
+- [ ] detach (long-lived tasks)
+
+### Phase 6 — Error Handling
+
+- [ ] `T | !E` syntax everywhere (signatures, params, aliases)
+- [ ] `?` operator (propagation + unwrap)
+- [ ] `else:` (fallback + unwrap)
+- [ ] `raise` (explicit error return)
+- [ ] `quit()` / `quit(error)`
+
+### Phase 7 — Metaprogramming
+
+- [ ] Templates (inline substitution)
+- [ ] Macros (untyped AST transformation)
+- [ ] DSL support
+- [ ] `iris expand` for debugging
+
+### Phase 8 — Tooling
+
+- [ ] `iris fmt` (mandatory formatter, 2-space indent)
+- [ ] `iris test` (test runner)
+- [ ] `iris deps` (dependency manager)
+- [ ] `iris check --api-compat` (breaking change detection)
+- [ ] LSP (language server protocol)
+
+### Phase 9 — Additional Targets
+
+- [ ] C++ code generation
+- [ ] JavaScript code generation
+
+### Phase 10 — Self-hosting
+
+- [ ] Rewrite compiler in Iris
+- [ ] Bootstrap: Iris compiler compiles itself
