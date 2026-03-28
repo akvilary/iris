@@ -11,9 +11,8 @@ pub enum TokenKind {
     RuneLit(char),
     BoolLit(bool),
 
-    // Identifiers and labels
+    // Identifiers
     Ident(String),
-    Label(String),
 
     // Keywords
     Func, Const, Mut,
@@ -21,7 +20,7 @@ pub enum TokenKind {
     While, For, In,
     Break, Continue, Return, Result,
     Block, Spawn, Detach,
-    Object, Enum, Concept,
+    Object, Enum, Tuple, Concept,
     Import, From, Export,
     When, IsMain,
     Case, Of, Discard,
@@ -106,6 +105,7 @@ impl TokenKind {
             "detach" => TokenKind::Detach,
             "object" => TokenKind::Object,
             "enum" => TokenKind::Enum,
+            "tuple" => TokenKind::Tuple,
             "concept" => TokenKind::Concept,
             "import" => TokenKind::Import,
             "from" => TokenKind::From,

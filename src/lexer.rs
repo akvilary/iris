@@ -51,7 +51,13 @@ impl Lexer {
                 '#' => self.skip_comment(),
                 '"' => tokens.extend(self.read_string()),
                 '\'' => tokens.push(self.read_rune()),
-                '`' => tokens.push(self.read_label()),
+                '`' => {
+                    self.errors.push(CompileError::new(
+                        "backtick labels removed — use @name instead",
+                        self.line, self.col,
+                    ));
+                    self.advance();
+                }
                 '0'..='9' => tokens.push(self.read_number()),
                 _ if ch.is_alphabetic() || ch == '_' => tokens.push(self.read_identifier()),
                 _ => {
@@ -325,29 +331,6 @@ impl Lexer {
         Token::new(TokenKind::from_keyword(&word), start_line, start_col)
     }
 
-    fn read_label(&mut self) -> Token {
-        let start_line = self.line;
-        let start_col = self.col;
-        self.advance(); // skip `
-
-        let mut name = String::new();
-        while let Some(ch) = self.peek() {
-            if ch.is_alphanumeric() || ch == '_' {
-                name.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-
-        if name.is_empty() {
-            self.errors.push(CompileError::new(
-                "empty label", start_line, start_col,
-            ));
-        }
-
-        Token::new(TokenKind::Label(name), start_line, start_col)
-    }
 
     fn read_operator(&mut self) -> Option<Token> {
         let line = self.line;

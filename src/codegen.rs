@@ -56,14 +56,12 @@ impl CodeGen {
                 "float" | "float64" => "double",
                 "float32" => "float",
                 "bool" => "bool",
-                "string" => "const char*",
+                "str" => "const char*",
+                "String" => "const char*",  // TODO: heap string type
                 "natural" => "uint64_t",
                 "rune" => "int32_t",
                 other => other,
             }.to_string(),
-            TypeExpr::Ref(inner) => {
-                format!("{}*", self.type_to_c(inner))
-            }
             TypeExpr::Generic { name, args } => {
                 let args_str = args.iter()
                     .map(|a| self.type_to_c(a))
@@ -149,7 +147,7 @@ impl CodeGen {
         // Types and enums first
         for stmt in stmts {
             match stmt {
-                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } => {
+                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } | Stmt::TupleDecl { .. } => {
                     self.gen_stmt(stmt);
                     self.emit("\n");
                 }
@@ -165,7 +163,7 @@ impl CodeGen {
                     self.gen_stmt(stmt);
                     self.emit("\n");
                 }
-                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } => {} // already emitted
+                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } | Stmt::TupleDecl { .. } => {} // already emitted
                 _ => top_level.push(stmt),
             }
         }
@@ -253,6 +251,9 @@ impl CodeGen {
             }
             Stmt::EnumDecl { name, variants, .. } => {
                 self.gen_enum_decl(name, variants);
+            }
+            Stmt::TupleDecl { name, fields, .. } => {
+                self.gen_object_decl(name, &None, fields);
             }
             Stmt::Case { expr, branches, else_body } => self.gen_case(expr, branches, else_body),
             Stmt::Discard => self.emit_line("(void)0;"),
@@ -520,10 +521,6 @@ impl CodeGen {
             Expr::Unary { op, expr } => {
                 self.emit(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!" });
                 self.gen_expr(expr);
-            }
-            Expr::Ref(inner) => {
-                self.emit("&");
-                self.gen_expr(inner);
             }
             Expr::Call { func, args } => {
                 if let Expr::Ident(name) = func.as_ref() {

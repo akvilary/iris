@@ -7,6 +7,12 @@ pub struct Parser {
     pos: usize,
 }
 
+/// Result of parsing `@name[+]` — the universal declaration prefix.
+struct AtName {
+    name: String,
+    public: bool,
+}
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Parser { tokens, pos: 0 }
@@ -51,7 +57,22 @@ impl Parser {
         CompileError::new(msg, tok.line, tok.col)
     }
 
-    // ── Name helpers ──
+    // ── @name parsing — the universal prefix ──
+
+    /// Parse `@name[+]` — expects `@`, reads name (ident or keyword), optional `+`.
+    /// Used everywhere: declarations, fields, params, labels, loop vars.
+    fn parse_at_name(&mut self) -> CompileResult<AtName> {
+        self.expect(&TokenKind::At)?;
+        let name = self.parse_any_name()?;
+        let public = if self.at(&TokenKind::Plus) { self.advance(); true } else { false };
+        Ok(AtName { name, public })
+    }
+
+    /// Parse `@name` without public marker — for params, loop vars, enum fields.
+    fn parse_at_ident(&mut self) -> CompileResult<String> {
+        self.expect(&TokenKind::At)?;
+        self.parse_ident_name()
+    }
 
     fn parse_ident_name(&mut self) -> CompileResult<String> {
         if let TokenKind::Ident(name) = self.peek().clone() {
@@ -62,7 +83,7 @@ impl Parser {
         }
     }
 
-    /// Parse any name — identifier or keyword used as name (for fields/enum variants).
+    /// Parse any name — identifier or keyword (for fields/enum variants).
     fn parse_any_name(&mut self) -> CompileResult<String> {
         let name = match self.peek().clone() {
             TokenKind::Ident(name) => name,
@@ -96,6 +117,7 @@ impl Parser {
             TokenKind::Block => Some("block"),
             TokenKind::Object => Some("object"),
             TokenKind::Enum => Some("enum"),
+            TokenKind::Tuple => Some("tuple"),
             TokenKind::Case => Some("case"),
             TokenKind::Of => Some("of"),
             TokenKind::Not => Some("not"),
@@ -114,15 +136,10 @@ impl Parser {
         }
     }
 
-    /// Parse `+` after a name for public visibility.
-    fn try_parse_public(&mut self) -> bool {
-        if self.at(&TokenKind::Plus) { self.advance(); true } else { false }
-    }
-
-    fn try_parse_label(&mut self) -> Option<String> {
-        if let TokenKind::Label(name) = self.peek().clone() {
-            self.advance();
-            Some(name)
+    /// Try to parse an optional identifier (for break/continue labels).
+    fn try_parse_ident(&mut self) -> Option<String> {
+        if let TokenKind::Ident(_) = self.peek() {
+            Some(self.parse_ident_name().unwrap())
         } else {
             None
         }
@@ -146,19 +163,24 @@ impl Parser {
         match self.peek().clone() {
             // @ starts all declarations
             TokenKind::At => self.parse_decl(),
-            // Control flow
+            // Control flow (unlabeled)
             TokenKind::If => self.parse_if_stmt(),
-            TokenKind::While => self.parse_while(),
-            TokenKind::For => self.parse_for(),
-            TokenKind::Break => self.parse_break(),
-            TokenKind::Continue => self.parse_continue(),
+            TokenKind::While => { self.advance(); self.parse_while_body(None) }
+            TokenKind::For => { self.advance(); self.parse_for_body(None) }
+            TokenKind::Break => { self.advance(); Ok(Stmt::Break(self.try_parse_ident())) }
+            TokenKind::Continue => { self.advance(); Ok(Stmt::Continue(self.try_parse_ident())) }
             TokenKind::Return => { self.advance(); Ok(Stmt::Return) }
             TokenKind::Result => self.parse_result_assign(),
-            TokenKind::Block => self.parse_block(),
-            TokenKind::Spawn => self.parse_spawn(),
+            TokenKind::Block => {
+                self.advance();
+                self.expect(&TokenKind::Colon)?;
+                self.skip_newlines();
+                Ok(Stmt::Block { label: None, body: self.parse_block_body()? })
+            }
+            TokenKind::Spawn => { self.advance(); self.expect(&TokenKind::Colon)?; self.skip_newlines(); Ok(Stmt::Spawn(self.parse_block_body()?)) }
             TokenKind::Case => self.parse_case(),
             // Module
-            TokenKind::Import => self.parse_import(),
+            TokenKind::Import => { self.advance(); Ok(Stmt::Import(self.parse_ident_name()?)) }
             // Other
             TokenKind::Raise => { self.advance(); Ok(Stmt::Raise(self.parse_expr()?)) }
             TokenKind::Discard => { self.advance(); Ok(Stmt::Discard) }
@@ -167,53 +189,56 @@ impl Parser {
         }
     }
 
-    /// Parse declaration starting with `@`: @name[+] = / mut / const / fn / object / enum
+    /// Parse declaration starting with `@`.
+    /// Dispatches based on what follows `@name[+]`.
     fn parse_decl(&mut self) -> CompileResult<Stmt> {
-        self.advance(); // skip @
-        let name = self.parse_any_name()?;
-        let public = self.try_parse_public();
+        let at = self.parse_at_name()?;
 
         match self.peek().clone() {
-            // @x = value (immutable variable)
+            // @x = value
             TokenKind::Eq => {
                 self.advance();
-                let value = self.parse_expr()?;
-                Ok(Stmt::Decl { name, public, modifier: DeclModifier::Default, value: Some(value) })
+                Ok(Stmt::Decl { name: at.name, public: at.public, modifier: DeclModifier::Default, value: Some(self.parse_expr()?) })
             }
-            // @x mut = value (mutable variable)
+            // @x mut = value
             TokenKind::Mut => {
                 self.advance();
                 self.expect(&TokenKind::Eq)?;
-                let value = self.parse_expr()?;
-                Ok(Stmt::Decl { name, public, modifier: DeclModifier::Mut, value: Some(value) })
+                Ok(Stmt::Decl { name: at.name, public: at.public, modifier: DeclModifier::Mut, value: Some(self.parse_expr()?) })
             }
-            // @x const = value (constant)
+            // @x const = value
             TokenKind::Const => {
                 self.advance();
                 self.expect(&TokenKind::Eq)?;
-                let value = self.parse_expr()?;
-                Ok(Stmt::Decl { name, public, modifier: DeclModifier::Const, value: Some(value) })
+                Ok(Stmt::Decl { name: at.name, public: at.public, modifier: DeclModifier::Const, value: Some(self.parse_expr()?) })
             }
-            // @name fn(...) -> Type:
-            TokenKind::Func => {
-                self.advance();
-                self.parse_fn_body(name, public)
-            }
+            // @name func(...)
+            TokenKind::Func => { self.advance(); self.parse_fn_body(at.name, at.public) }
             // @Name object:
-            TokenKind::Object => {
-                self.advance();
-                self.parse_object_body(name, public)
-            }
+            TokenKind::Object => { self.advance(); self.parse_object_body(at.name, at.public) }
             // @Name enum:
-            TokenKind::Enum => {
+            TokenKind::Enum => { self.advance(); self.parse_enum_body(at.name, at.public) }
+            // @Name tuple:\n  @x int\n  @y int
+            TokenKind::Tuple => { self.advance(); self.parse_tuple_block(at.name, at.public) }
+            // @Name (@x int, @y int) — inline tuple
+            TokenKind::LParen => self.parse_tuple_inline(at.name, at.public),
+            // @label while ...:
+            TokenKind::While => { self.advance(); self.parse_while_body(Some(at.name)) }
+            // @label for @item in ...:
+            TokenKind::For => { self.advance(); self.parse_for_body(Some(at.name)) }
+            // @label block:
+            TokenKind::Block => {
                 self.advance();
-                self.parse_enum_body(name, public)
+                self.expect(&TokenKind::Colon)?;
+                self.skip_newlines();
+                Ok(Stmt::Block { label: Some(at.name), body: self.parse_block_body()? })
             }
-            _ => Err(self.error("expected =, mut, const, fn, object, or enum after @name"))
+            _ => Err(self.error("expected =, mut, const, func, object, enum, while, for, or block after @name"))
         }
     }
 
-    /// Parse function body after `@name[+] fn`.
+    // ── Function ──
+
     fn parse_fn_body(&mut self, name: String, public: bool) -> CompileResult<Stmt> {
         self.expect(&TokenKind::LParen)?;
         let params = self.parse_params()?;
@@ -243,26 +268,52 @@ impl Parser {
         Ok(Stmt::FnDecl { name, public, params, return_type, error_types, body })
     }
 
-    /// Parse function params: @name type, @name mut &Type, ...
+    /// Parse function params: `@name Type, @name mut Type, @name own Type`
     fn parse_params(&mut self) -> CompileResult<Vec<Param>> {
         let mut params = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-            self.expect(&TokenKind::At)?;
-            let name = self.parse_ident_name()?;
-            let mutable = if self.at(&TokenKind::Mut) {
-                self.advance();
-                true
-            } else {
-                false
+            let name = self.parse_at_ident()?;
+            let modifier = match self.peek() {
+                TokenKind::Mut => { self.advance(); ParamModifier::Mut }
+                TokenKind::Own => { self.advance(); ParamModifier::Own }
+                _ => ParamModifier::Default,
             };
             let type_ann = self.parse_type()?;
-            params.push(Param { name, mutable, type_ann });
+            params.push(Param { name, modifier, type_ann });
             if self.at(&TokenKind::Comma) { self.advance(); }
         }
         Ok(params)
     }
 
-    /// Parse object body after `@Name[+] object`.
+    // ── Type declarations (object / enum / tuple) ──
+
+    /// Parse typed fields in block form: `:\n  @name[+] Type\n  ...`
+    /// Shared by object and tuple block declarations.
+    fn parse_fields_block(&mut self) -> CompileResult<Vec<TypeField>> {
+        self.expect(&TokenKind::Colon)?;
+        self.skip_newlines();
+        self.parse_indented_items(|p| {
+            let at = p.parse_at_name()?;
+            let type_ann = p.parse_type()?;
+            Ok(TypeField { name: at.name, public: at.public, type_ann })
+        })
+    }
+
+    /// Parse typed fields in inline form: `(@name[+] Type, ...)`
+    /// Shared by inline tuple and enum variant fields.
+    fn parse_fields_inline(&mut self) -> CompileResult<Vec<TypeField>> {
+        self.advance(); // skip (
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let at = self.parse_at_name()?;
+            let type_ann = self.parse_type()?;
+            fields.push(TypeField { name: at.name, public: at.public, type_ann });
+            if self.at(&TokenKind::Comma) { self.advance(); }
+        }
+        self.expect(&TokenKind::RParen)?;
+        Ok(fields)
+    }
+
     fn parse_object_body(&mut self, name: String, public: bool) -> CompileResult<Stmt> {
         let parent = if self.at(&TokenKind::Of) {
             self.advance();
@@ -270,32 +321,29 @@ impl Parser {
         } else {
             None
         };
-        self.expect(&TokenKind::Colon)?;
-        self.skip_newlines();
-
-        let fields = self.parse_indented_items(|p| {
-            p.expect(&TokenKind::At)?;
-            let name = p.parse_any_name()?;
-            let public = p.try_parse_public();
-            let type_ann = p.parse_type()?;
-            Ok(TypeField { name, public, type_ann })
-        })?;
-
+        let fields = self.parse_fields_block()?;
         Ok(Stmt::ObjectDecl { name, public, parent, fields })
     }
 
-    /// Parse enum body after `@Name[+] enum`.
+    fn parse_tuple_block(&mut self, name: String, public: bool) -> CompileResult<Stmt> {
+        let fields = self.parse_fields_block()?;
+        Ok(Stmt::TupleDecl { name, public, fields })
+    }
+
+    fn parse_tuple_inline(&mut self, name: String, public: bool) -> CompileResult<Stmt> {
+        let fields = self.parse_fields_inline()?;
+        Ok(Stmt::TupleDecl { name, public, fields })
+    }
+
     fn parse_enum_body(&mut self, name: String, public: bool) -> CompileResult<Stmt> {
         self.expect(&TokenKind::Colon)?;
         self.skip_newlines();
 
         let variants = self.parse_indented_items(|p| {
-            p.expect(&TokenKind::At)?;
-            let name = p.parse_any_name()?;
-            if p.at(&TokenKind::Plus) { p.advance(); } // skip public marker on variants
+            let at = p.parse_at_name()?;
             let value = p.parse_enum_value()?;
             if p.at(&TokenKind::Comma) { p.advance(); }
-            Ok(EnumVariant { name, value })
+            Ok(EnumVariant { name: at.name, value })
         })?;
 
         Ok(Stmt::EnumDecl { name, public, variants })
@@ -310,17 +358,9 @@ impl Parser {
                 _ => Err(self.error("expected int or string value for enum variant")),
             }
         } else if self.at(&TokenKind::LParen) {
-            self.advance();
-            let mut fields = Vec::new();
-            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-                self.expect(&TokenKind::At)?;
-                let name = self.parse_ident_name()?;
-                let type_ann = self.parse_type()?;
-                fields.push((name, type_ann));
-                if self.at(&TokenKind::Comma) { self.advance(); }
-            }
-            self.expect(&TokenKind::RParen)?;
-            Ok(Some(EnumValue::Fields(fields)))
+            let fields = self.parse_fields_inline()?;
+            let converted = fields.into_iter().map(|f| (f.name, f.type_ann)).collect();
+            Ok(Some(EnumValue::Fields(converted)))
         } else {
             Ok(None)
         }
@@ -357,22 +397,18 @@ impl Parser {
         Ok(Stmt::If { branches, else_body })
     }
 
-    fn parse_while(&mut self) -> CompileResult<Stmt> {
-        self.advance();
+    fn parse_while_body(&mut self, label: Option<String>) -> CompileResult<Stmt> {
         let condition = self.parse_expr()?;
-        let label = self.try_parse_label();
         self.expect(&TokenKind::Colon)?;
         self.skip_newlines();
         let body = self.parse_block_body()?;
         Ok(Stmt::While { condition, label, body })
     }
 
-    fn parse_for(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        let var = self.parse_ident_name()?;
+    fn parse_for_body(&mut self, label: Option<String>) -> CompileResult<Stmt> {
+        let var = self.parse_at_ident()?;
         self.expect(&TokenKind::In)?;
         let iter = self.parse_expr()?;
-        let label = self.try_parse_label();
         self.expect(&TokenKind::Colon)?;
         self.skip_newlines();
         let body = self.parse_block_body()?;
@@ -389,41 +425,10 @@ impl Parser {
         Ok(Stmt::For { var, iter, label, body, else_body })
     }
 
-    fn parse_break(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        Ok(Stmt::Break(self.try_parse_label()))
-    }
-
-    fn parse_continue(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        Ok(Stmt::Continue(self.try_parse_label()))
-    }
-
     fn parse_result_assign(&mut self) -> CompileResult<Stmt> {
         self.advance();
         self.expect(&TokenKind::Eq)?;
         Ok(Stmt::ResultAssign { value: self.parse_expr()? })
-    }
-
-    fn parse_block(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        let label = self.try_parse_label();
-        self.expect(&TokenKind::Colon)?;
-        self.skip_newlines();
-        let body = self.parse_block_body()?;
-        Ok(Stmt::Block { label, body })
-    }
-
-    fn parse_spawn(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        self.expect(&TokenKind::Colon)?;
-        self.skip_newlines();
-        Ok(Stmt::Spawn(self.parse_block_body()?))
-    }
-
-    fn parse_import(&mut self) -> CompileResult<Stmt> {
-        self.advance();
-        Ok(Stmt::Import(self.parse_ident_name()?))
     }
 
     // ── Case ──
@@ -466,7 +471,7 @@ impl Parser {
     }
 
     fn parse_else_branch(&mut self) -> CompileResult<Vec<Stmt>> {
-        self.advance(); // skip 'else'
+        self.advance();
         self.expect(&TokenKind::Colon)?;
         self.skip_newlines();
         self.parse_block_body()
@@ -547,7 +552,7 @@ impl Parser {
             };
         }
 
-        self.advance(); // skip Indent
+        self.advance();
         let mut stmts = Vec::new();
 
         while !self.at(&TokenKind::Dedent) && !self.at(&TokenKind::Eof) {
@@ -662,10 +667,6 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Dollar(Box::new(self.parse_postfix()?)))
             }
-            TokenKind::Ampersand => {
-                self.advance();
-                Ok(Expr::Ref(Box::new(self.parse_postfix()?)))
-            }
             _ => self.parse_postfix(),
         }
     }
@@ -682,7 +683,12 @@ impl Parser {
                 }
                 TokenKind::Dot => {
                     self.advance();
-                    let field = self.parse_ident_name()?;
+                    let field = if let TokenKind::IntLit(n) = self.peek().clone() {
+                        self.advance();
+                        n.to_string()
+                    } else {
+                        self.parse_ident_name()?
+                    };
                     expr = Expr::FieldAccess { expr: Box::new(expr), field };
                 }
                 TokenKind::LBracket => {
@@ -757,11 +763,11 @@ impl Parser {
             return Ok(Expr::TupleLit(Vec::new()));
         }
 
-        // Detect named tuple: (name: val, ...)
+        // Detect named tuple: (name=val, ...)
         let first_named = if let TokenKind::Ident(_) = self.peek().clone() {
             let saved = self.pos;
             self.advance();
-            if self.at(&TokenKind::Colon) {
+            if self.at(&TokenKind::Eq) {
                 self.pos = saved;
                 true
             } else {
@@ -776,7 +782,7 @@ impl Parser {
             let mut elems = Vec::new();
             while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
                 let name = self.parse_ident_name()?;
-                self.expect(&TokenKind::Colon)?;
+                self.expect(&TokenKind::Eq)?;
                 let val = self.parse_expr()?;
                 elems.push((Some(name), val));
                 if self.at(&TokenKind::Comma) { self.advance(); }
@@ -803,7 +809,7 @@ impl Parser {
     }
 
     fn parse_string_interp(&mut self) -> CompileResult<Expr> {
-        self.advance(); // skip InterpStart
+        self.advance();
         let mut parts = Vec::new();
         loop {
             match self.peek().clone() {
@@ -826,7 +832,7 @@ impl Parser {
         Ok(Expr::StringInterp { parts })
     }
 
-    /// Parse call arguments: name=value for named, or just value for positional.
+    /// Parse call arguments: `name=value` for named, or just `value` for positional.
     fn parse_call_args(&mut self) -> CompileResult<Vec<CallArg>> {
         let mut args = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
@@ -852,11 +858,16 @@ impl Parser {
     // ── Types ──
 
     fn parse_type(&mut self) -> CompileResult<TypeExpr> {
-        // &Type — reference
-        if self.at(&TokenKind::Ampersand) {
+        // (Type, Type) — tuple type
+        if self.at(&TokenKind::LParen) {
             self.advance();
-            let inner = self.parse_type()?;
-            return Ok(TypeExpr::Ref(Box::new(inner)));
+            let mut elems = Vec::new();
+            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                elems.push((None, self.parse_type()?));
+                if self.at(&TokenKind::Comma) { self.advance(); }
+            }
+            self.expect(&TokenKind::RParen)?;
+            return Ok(TypeExpr::Tuple(elems));
         }
 
         let name = self.parse_ident_name()?;

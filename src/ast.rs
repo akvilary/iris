@@ -49,7 +49,6 @@ pub enum Expr {
     },
     Dollar(Box<Expr>),
     Question(Box<Expr>),
-    Ref(Box<Expr>),          // &value
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +158,11 @@ pub enum Stmt {
         public: bool,
         variants: Vec<EnumVariant>,
     },
+    TupleDecl {
+        name: String,
+        public: bool,
+        fields: Vec<TypeField>,
+    },
 
     // Module
     Import(String),
@@ -203,8 +207,15 @@ pub enum DeclModifier {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
-    pub mutable: bool,
+    pub modifier: ParamModifier,
     pub type_ann: TypeExpr,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParamModifier {
+    Default,  // immutable reference (auto)
+    Mut,      // mutable reference
+    Own,      // takes ownership
 }
 
 #[derive(Debug, Clone)]
@@ -265,5 +276,4 @@ pub enum TypeExpr {
         ok_type: Box<TypeExpr>,
         error_types: Vec<TypeExpr>,
     },
-    Ref(Box<TypeExpr>),  // &Type
 }

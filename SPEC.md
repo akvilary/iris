@@ -29,7 +29,7 @@ Top-level code executes directly, no `main` required:
 echo("hello world")
 
 @x = 42
-echo($x)
+echo(x)
 ```
 
 For libraries — `when isMain:` to run code only when file is executed directly
@@ -57,24 +57,24 @@ while condition:
   doSomething()
 
 # for
-for item in collection:
+for @item in collection:
   process(item)
 
-for i in 0..10:
+for @i in 0..10:
   echo(i)             # 0, 1, 2, ..., 10 (inclusive)
 
-for i in 0..<10:
+for @i in 0..<10:
   echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
-# Named loops via `label — for break/continue targeting a specific loop
-while true `outer:
-  for item in myCollection `inner:
+# Named loops via @name — for break/continue targeting a specific loop
+@outer while true:
+  @inner for @item in myCollection:
     if item.id == 3:
-      continue `outer     # skip to next while iteration
+      continue outer     # skip to next while iteration
     if item.id == 99:
-      break `outer        # exit while entirely
+      break outer        # exit while entirely
     if item.id < 0:
-      continue `inner     # skip to next for iteration
+      continue inner     # skip to next for iteration
 ```
 
 ### Loop as expression
@@ -84,26 +84,28 @@ Loops can return values via `result`. If the loop may complete without
 
 ```
 # while true — always breaks, result always set:
-let input = while true `loop:
-  let line = readLine()
-  if not line.isEmpty:
-    result = line
-    break `loop
+@input = @loop while true:
+  @line = readLine()
+    case line:
+      Ok:
+        result = line
+        break loop
+    else:
+      continue
 
 # for — may complete without break, else required:
-let found = for item in list `search:
+@found = @search for @item in list:
   if item.matches(query):
     result = item
-    break `search
+    break search
 else:
   result = defaultItem
 
 # Spawns inside loop are cancelled on break:
-for url in urls `urls:
-  spawn:
-    fetch(url)
+@loop for @url in urls:
+  spawn: fetch(url)
   if timeout:
-    break `urls          # all spawns cancelled, memory freed
+    break loop          # all spawns cancelled, memory freed
 ```
 
 ## Expressions
@@ -112,10 +114,10 @@ for url in urls `urls:
 
 ```
 # Inline if:
-let x = if condition: "yes" else: "no"
+@x = if condition: "yes" else: "no"
 
 # Multiline if:
-let status = if code == 200:
+@status = if code == 200:
   "ok"
 elif code == 404:
   "not found"
@@ -123,7 +125,7 @@ else:
   "error"
 
 # case as expression:
-let name = case color:
+@name = case color:
   of Color.red: "Red"
   of Color.green: "Green"
   of Color.blue: "Blue"
@@ -139,12 +141,12 @@ Other types require explicit comparison — compiler error otherwise.
 if isReady:            # OK
 
 # Option — true if some:
-let a = some(42)
+@a = some(42)
 if a:
   echo(a.get())        # .get() to extract value
 
 # Result union — true if ok:
-let cfg = readConfig("app.toml")
+@cfg = readConfig("app.toml")
 if cfg:
   start(cfg.get())     # .get() to extract value
 
@@ -197,8 +199,8 @@ This allows using reserved words as field/variant names.
   @age+ int
 
 @Admin+ object of User:
-  @for string            # reserved word — OK with @
-  @type string           # reserved word — OK with @
+  @for str            # reserved word — OK with @
+  @type str           # reserved word — OK with @
   @data int
 
 @Status+ enum:
@@ -233,7 +235,7 @@ Public visibility via `+` after the name:
 @Config+ object:
   @host+ string         # public field
   @port+ int            # public field
-  @secret string        # private field
+  @secret str        # private field
 
 @maxRetries+ const = 3
 ```
@@ -258,7 +260,8 @@ import net
 from net import connect, listen
 
 # Now available directly:
-@conn = connect("localhost", 8080)
+do @conn = connect("localhost", 8080) else:
+  quit(conn.getError())
 ```
 
 ### From export — re-export from nested modules
@@ -281,7 +284,7 @@ export myLib.internal.parser
 Arguments can be passed by name using `=`. Order doesn't matter for named arguments:
 
 ```
-@createUser+ func(@name string, @age int) -> User:
+@createUser+ func(@name str, @age int) -> User:
   result = User(name=name, age=age)
 
 # Positional (by order):
@@ -298,14 +301,14 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 ### Declaration
 
 ```
-@funcName+ func(@param1 Type1, @param2 Type2) -> ReturnType | !ErrorType:
+@funcName+ func(@param1 Type1, @param2 Type2) -> Result:
   ...
 ```
 
 - `+` after name = public
-- `| !ErrorType` = function can return an error (result union)
-- Multiple error types: `-> ReturnType | !ErrA | !ErrB`
+- All functions implicitly return Result (see Error Handling)
 - `?` operator for error propagation
+- `raise` to return an error
 
 ### Return Values
 
@@ -321,7 +324,7 @@ Return value is set explicitly:
   result = user
 
 # result can be set anywhere, including branches:
-@classify+ func(@n int) -> string:
+@classify+ func(@n int) -> str:
   if n > 0:
     result = "positive"
   elif n < 0:
@@ -353,32 +356,88 @@ Every variable lives until the end of its scope (function or block).
 When the scope ends, the variable is destroyed. No GC, no reference counting.
 The compiler verifies all of this automatically.
 
-All objects are value types. Use `&` for explicit references.
-No `ref object` — only `object`, with `&` to pass by reference.
+### Stack and Heap
 
-**When to use `Pool`:** only when you have cyclic references
-(A references B and B references A). Everything else is automatic.
+**Rule: look at the type — know where data lives.** No surprises.
 
-### References and Mutability
+**Stack by default.** All primitives and objects are value types on the stack.
+No `ref object` — only `object`. Like Rust, not like Go or Java.
 
-Default is pass by value. Use `&` for references, `mut` for mutability:
+**Heap only explicitly** — via `Pool` or heap-owning types (`String`, `Seq`, etc.).
 
-| Syntax | Meaning | Rust equivalent |
-|--------|---------|-----------------|
-| `@param Type` | By value (immutable) | `T` |
-| `@param &Type` | By reference (immutable) | `&T` |
-| `@param mut &Type` | By reference (mutable) | `&mut T` |
+#### Allocation table — every type, no exceptions
+
+| Type | Where | Size | Notes |
+|------|-------|------|-------|
+| `int`, `int8`..`int64` | Stack | 1-8 bytes | Primitive |
+| `uint`, `uint8`..`uint64` | Stack | 1-8 bytes | Primitive |
+| `float`, `float32`, `float64` | Stack | 4-8 bytes | Primitive |
+| `bool` | Stack | 1 byte | Primitive |
+| `rune` | Stack | 4 bytes | Unicode code point |
+| `natural` | Stack | 8 bytes | Non-negative integer |
+| `str` | Stack | Max 256 bytes | Immutable, compiler optimizes known sizes |
+| `array[T, N]` | Stack | `N * sizeof(T)` | Fixed size, known at compile time |
+| Custom objects | Stack | Sum of fields | `@User object:` → stack |
+| `String` | **Heap** | Unlimited | Mutable, growable. Metadata (ptr+len+cap) on stack |
+| `Seq[T]` | **Heap** | Unlimited | Like Rust's `Vec<T>`. Metadata on stack |
+| `HashTable[K,V]` | **Heap** | Unlimited | Like Rust's `HashMap`. Metadata on stack |
+| `HashSet[T]` | **Heap** | Unlimited | Like Rust's `HashSet`. Metadata on stack |
+| `Pool` allocations | **Heap** | Unlimited | `pool.alloc(...)` — explicit arena heap |
+
+Heap types (`String`, `Seq`, `HashTable`, `HashSet`) own their heap buffer
+and free it when they go out of scope. The metadata (pointer, length, capacity)
+lives on the stack — only the buffer is in heap. This is explicit:
+**you choose a heap type, you know it allocates.**
 
 ```
-@length func(@s string) -> int:           # by value (default)
+# Stack — all data on stack, no heap allocation
+@x int = 42                           # 8 bytes stack
+@name str = "Alice"                   # 6 bytes stack (optimized)
+@point = Point(x=10, y=20)           # sizeof(Point) stack
+@arr array[int, 100] = [0; 100]      # 800 bytes stack
+
+# Heap — explicit, you chose a heap type
+@buf mut String = String.new()        # buffer in heap
+@list mut Seq[int] = Seq[int].new()   # buffer in heap
+@map mut HashTable[str, int] = {}     # buffer in heap
+
+# Heap via Pool — explicit arena allocation
+@pool = newPool()
+@node = pool.alloc(HugeNode(...))     # data in pool's heap arena
+```
+
+No `&` in the language. All function parameters are passed by reference
+automatically — the compiler handles it (see Parameter passing).
+No automatic escape analysis. Programmer decides where data lives.
+Compiler never silently moves data from stack to heap.
+
+### Parameter passing
+
+All parameters are passed **by reference automatically**.
+The compiler optimizes small types (int, bool, float) to registers.
+No `&` in the language — the compiler handles it.
+
+| Syntax | Meaning |
+|--------|---------|
+| `@param Type` | Immutable reference (default) |
+| `@param mut Type` | Mutable reference |
+| `@param own Type` | Takes ownership (move) |
+
+```
+@length func(@s str) -> int:          # immutable ref (auto)
   result = s.len
 
-@sort func(@list mut &slice[int]):        # mutable reference
+@sort func(@list mut slice[int]):     # mutable ref — can modify caller's data
   ...
 
-@send func(@msg Message):                 # by value (ownership transfer)
+@send func(@msg own Message):         # takes ownership — caller can't use msg after
   channel.push(msg)
 ```
+
+The borrow checker ensures:
+- Immutable refs: multiple allowed simultaneously
+- Mutable ref: only one at a time, no other refs
+- Ownership: value moved, caller loses access
 
 #### Regular code — just write code, everything is automatic
 
@@ -410,15 +469,15 @@ No annotations needed. Compiler applies simple rules:
 
 ```
 # Rule 1 — owned return, no concern:
-@length func(@s string) -> int:
+@length func(@s str) -> int:
   result = s.len
 
 # Rule 2 — one borrow param, obvious:
-fn firstWord(s: string) -> string:
+@firstWord func(@s str) -> str:
   result = s.split(" ")[0]       # tied to s
 
 # Rule 3 — multiple borrows, tied to all:
-@longest func(@x string, @y string) -> string:
+@longest func(@x str, @y str) -> str:
   result = if x.len > y.len: x else: y
   # compiler: result tied to both x AND y
 
@@ -430,18 +489,33 @@ fn firstWord(s: string) -> string:
 No function body analysis needed. Fast compilation. Separate module compilation.
 May reject rare valid code — but never allows a bug.
 
-### Cyclic References (Pool)
+### Pool — heap allocation
 
-The only case where you need explicit memory management:
-**A references B and B references A.** The borrow checker cannot handle
-cycles — use `Pool` to put cyclic data in a memory region.
+Pool is the **only mechanism** for heap allocation (like Rust's `Box`,
+but arena-based). Covers all heap use cases:
 
-`Pool` is a regular object created with `newPool()`. Freed automatically
-when it goes out of scope. All allocated data freed in O(1).
+- **Large objects** — avoid large stack allocations
+- **Recursive types** — self-referencing data needs known pointer size
+- **Cyclic references** — A references B and B references A
+- **Long-lived data** — data that must outlive the creating function
+
+`Pool` is created with `newPool()`. All data allocated through a pool
+is freed in O(1) when the pool goes out of scope.
 
 ```
-# Cyclic references — need Pool:
-@buildDom func() -> string:
+# Large object — put in heap to avoid stack overflow:
+@pool = newPool()
+@buf = pool.alloc(HugeBuffer(size=1_000_000))
+process(buf)
+# <- pool goes out of scope, buf freed
+
+# Recursive type — needs heap for known size:
+@Node+ object:
+  @value+ int
+  @next+ Pool       # child nodes allocated in same pool
+
+# Cyclic references:
+@buildDom func() -> str:
   @pool = newPool()
   @parent = pool.alloc(Element("div"))
   @child = pool.alloc(Element("span"))
@@ -450,8 +524,8 @@ when it goes out of scope. All allocated data freed in O(1).
   result = parent.render().clone()
 # <- pool goes out of scope, all memory freed in O(1)
 
-# NOT cyclic — no pool needed, just regular code:
-@buildList func() -> string:
+# Regular code — no pool needed:
+@buildList func() -> str:
   @items mut = newSeq[Item]()
   items.add(Item("first"))
   items.add(Item("second"))     # items owns the data, no cycles
@@ -487,7 +561,7 @@ printTree(root)
   result = a
 
 @traverse func(@node Node):
-  echo($node.name)
+  echo(node.name)
   for child in node.children:
     traverse(child)
 
@@ -521,31 +595,31 @@ processRoles(roles)
 | Syntax | What | Storage | Size |
 |--------|------|---------|------|
 | `array[int, 5]` | Fixed-size array | Stack (inline) | Known at compile-time |
-| `seq[int]` | Dynamic sequence | Heap | Grows at runtime |
+| `Seq[int]` | Dynamic sequence | Heap | Grows at runtime |
 | `slice[int]` | View/slice (parameters only) | Reference to existing data | Pointer + length |
 
 ```
 # Fixed array — stack
-let fixed: array[int, 5] = [1, 2, 3, 4, 5]
+@fixed: array[int, 5] = [1, 2, 3, 4, 5]
 
 # Dynamic sequence — heap, created with ~[...]
-var dynamic = ~[1, 2, 3]
+@dynamic mut = ~[1, 2, 3]
 dynamic.add(4)
 
 # Explicit type annotation also works
-var other: seq[int] = ~[10, 20, 30]
+@other mut Seq[int] = ~[10, 20, 30]
 
-# Empty seq
-var empty = seq[int]()
+# Empty Seq
+@empty mut = Seq[int]()
 
-# Slice — accepts both array and seq
-fn sum(arr: slice[int]) -> int:
+# Slice — accepts both array and Seq
+@sum func(@arr slice[int]) -> int:
   result = 0
-  for x in arr:
+  for @x in arr:
     result = result + x
 
 sum(fixed)      # OK — slice into stack array
-sum(dynamic)    # OK — slice into seq
+sum(dynamic)    # OK — slice into Seq
 ```
 
 ### HashTable
@@ -554,16 +628,16 @@ Inline hash table literal with `{key: value}`:
 
 ```
 # Create hash table:
-let headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
+@headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
 
 # Type: HashTable[string, string]
-let scores: HashTable[string, int] = {"alice": 100, "bob": 85}
+@scores: HashTable[string, int] = {"alice": 100, "bob": 85}
 
 # Access:
 echo(headers["Content-Type"])
 
 # Empty:
-let empty = HashTable[string, int]()
+@empty = HashTable[string, int]()
 ```
 
 ### HashSet
@@ -571,17 +645,17 @@ let empty = HashTable[string, int]()
 Inline hash set literal with `{values}`:
 
 ```
-let ids = {1, 2, 3, 4}
+@ids = {1, 2, 3, 4}
 # Type: HashSet[int]
 
-let names = {"Alice", "Bob", "Charlie"}
-# Type: HashSet[string]
+@names = {"Alice", "Bob", "Charlie"}
+# names of HashSet[string]
 
 if 2 in ids:
   echo("found")
 
 # Empty:
-let empty = HashSet[int]()
+@empty = HashSet[int]()
 ```
 
 Compiler distinguishes by syntax: `{k: v}` → HashTable, `{v}` → HashSet.
@@ -592,27 +666,53 @@ Named and unnamed tuples for lightweight data grouping:
 
 ```
 # Named tuple
-let point = (x: 10, y: 20)
+@point = (x=10, y=20)
 echo(point.x)              # 10
 echo(point.y)              # 20
 
 # Unnamed tuple
-let pair = (10, 20)
+@pair = (10, 20)
 echo(pair.0)                # 10
 
 # Tuple type
-type Point = tuple[x: int, y: int]
+@Point tuple:
+  @x int
+  @y int
+
+# or
+@Point (@x int, @y int)
 
 # Return multiple values without defining a separate type
-fn divide*(a: int, b: int) -> (quotient: int, remainder: int):
-  result = (quotient: a / b, remainder: a % b)
+@divide+ func(@a int, @b int) -> (@quotient int, @remainder int):
+  result = (quotient=a / b, remainder=a % b)
 
-let r = divide(10, 3)
+@r = divide(10, 3)
 echo(r.quotient)            # 3
 echo(r.remainder)           # 1
 
+# or
+@divide+ func[
+  (@a int, @b int),
+  (int, int)
+]:
+  result = (a / b, a % b)
+
+
+@divide+ func[
+  (
+    @a int,
+    @b int,
+  ),
+  (
+    int,
+    int,
+  )
+]:
+  result = (a / b, a % b)
+
+
 # Destructuring
-let (q, rem) = divide(10, 3)
+(@q, @rem) = divide(10, 3)
 echo(q)                      # 3
 ```
 
@@ -689,29 +789,49 @@ let emoji: rune = '🎉'
 
 ## Strings
 
-- `string` — immutable (like Python)
+Two string types — explicit about where data lives:
+
+| Type | Where | Max size | Mutability | Rust analogy |
+|------|-------|----------|------------|--------------|
+| `str` | Stack | 256 bytes | Immutable | Fixed `[u8; 256]` |
+| `String` | Heap | Unlimited | Mutable, growable | `String` |
+
 - UTF-8 by default
-- Ownership-based, no GC, no reference counting
-- Storage (transparent to programmer):
-  - Literals `"..."` → static memory
-  - Short (<=23 bytes) → inline SSO (stack)
-  - Long (>23 bytes) → heap, single owner
-- Passing: borrow by default (zero cost)
-- `StringBuf` — mutable buffer for building strings
-- Interpolation: `"hello {name}"` — built into lexer (not a macro), works everywhere
+- `str` — stack-allocated, immutable, max 256 bytes. No SSO, no hidden heap.
+  Literal too long → compile error. Runtime overflow → runtime error.
+- `String` — heap-allocated, growable, mutable buffer.
+  Use for large/dynamic text: file contents, network data, building strings.
+- Interpolation: `"hello {name}"` — built into lexer, works everywhere.
+
+#### `str` stack optimization
+
+Since `str` is immutable, the compiler optimizes stack allocation
+when the size is known at compile time:
+
+| Situation | Stack size |
+|-----------|-----------|
+| `@x str = "Hi"` | 3 bytes (compiler knows length) |
+| `@x str = if c: "a" else: "bb"` | 3 bytes (max of branches) |
+| `@x str = runtimeFunc()` | 256 bytes (max, length unknown) |
+| `func(@s str)` parameter | Passed by reference automatically (8 bytes) |
+
+The 256-byte max is a **type guarantee**, not always the actual allocation.
+The compiler allocates only what is needed when the value is known.
 
 ```
-let name = "Alice"                    # static memory
-let greeting = "Hello, {name}!"      # SSO
-let big = readFile("big.txt")        # heap, single owner
+@name str = "Alice"                   # stack, 6 bytes (optimized)
+@greeting str = "Hello, {name}!"     # stack, compiler computes size
 
-fn greet(s: string):                  # immutable borrow, zero cost
+@greet func(@s str):                  # passed by reference (auto), 8 bytes
   echo(s)
 
-let buf = newStringBuf()
-buf.add("part1")
-buf.add("part2")
-let result = buf.toString()          # final immutable string
+# For large/dynamic text — use String (heap)
+@buf mut String = String.new()
+buf.append("part1")
+buf.append("part2")
+@result str = buf.toStr()            # copy to stack str (must fit 256 bytes)
+
+@big String = readFile("big.txt")    # heap, no size limit
 ```
 
 String interpolation is processed at the **lexer level**, not as a macro.
@@ -823,15 +943,15 @@ No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 ```
 concept Printable:
-  fn toString(self) -> string
+  fn toString(self) -> str
 
 concept Comparable:
   fn lessThan(self, other: Self) -> bool
   fn equals(self, other: Self) -> bool
 
 concept Serializable:
-  fn toJson(self) -> string
-  fn fromJson(raw: string) -> Self
+  fn toJson(self) -> str
+  fn fromJson(raw: str) -> Self
 ```
 
 Usage is **optional**, for documentation and better compiler errors:
@@ -854,10 +974,10 @@ A type automatically satisfies a concept if it has the required methods:
 
 ```
 type User:
-  @name: string
+  @name: str
   @age: int
 
-fn toString(self: User) -> string:
+fn toString(self: User) -> str:
   result = "{self.name}, {self.age}"
 
 # User automatically satisfies Printable — has toString
@@ -867,7 +987,7 @@ fn toString(self: User) -> string:
 ### Generics
 
 ```
-fn map[T, U](list: slice[T], f: func(T) -> U) -> seq[U]:
+fn map[T, U](list: slice[T], f: func(T) -> U) -> Seq[U]:
   result = [f(x) for x in list]
 
 # With concept constraint (optional):
@@ -917,8 +1037,8 @@ macro serializable*(body: Ast) -> Ast:
   # adds toJson() and fromJson() methods to a type
   let typeName = body.name
   body.addFn:
-    fn toJson*(self) -> string:
-      var buf = newStringBuf()
+    fn toJson*(self) -> str:
+      @buf mut = String.new()
       buf.add("{")
       for i, field in body.fields:
         if i > 0: buf.add(", ")
@@ -930,14 +1050,14 @@ macro serializable*(body: Ast) -> Ast:
 # Usage — macro is just called, block is its AST argument:
 serializable:
   type User:
-    @name*: string
+    @name*: str
     @age*: int
 
 # Compiler expands to:
 # type User:
-#     @name*: string
+#     @name*: str
 #     @age*: int
-# fn toJson*(self: User) -> string:
+# fn toJson*(self: User) -> str:
 #     ...
 ```
 
@@ -1126,7 +1246,7 @@ let ch = channel[int](0)
 let val = ch.receive()      # blocks until value available
 
 # Ownership transfer — sender loses access:
-let ch = channel[seq[int]](1)
+let ch = channel[Seq[int]](1)
 var data = ~[1, 2, 3]
 ch.send(data)           # data MOVED into channel
 # echo(data)            # ERROR: data was moved
@@ -1176,7 +1296,7 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-fn fetch(url: string) -> bytes | !NetError:
+fn fetch(url: str) -> bytes | !NetError:
   let resp = http.get(url)?
   result = resp.body()
 
@@ -1209,43 +1329,69 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-`T | !E` is syntactic sugar that generates `Result[T, E]` under the hood.
-`T | !E` syntax works everywhere — signatures, parameters, type aliases.
-The programmer never writes `Result[T, E]` directly.
-`result` sets the success value. Errors are returned via `raise`.
+**All functions implicitly return Result.** Even pure computations like
+`add(1, 2)` return Result — the compiler optimizes away the wrapper
+when a function never errors.
 
-### Returning errors from a function (function author)
+No `Result[T, E]` or `| !ErrorType` in signatures. The return type
+is the success type; errors are always possible.
+
+### Returning errors (function author)
 
 ```
-fn readConfig*(path: string) -> Config | !IoError | !ParseError:
-  let raw = fs.read(path)?           # ? propagates IoError up
-  let parsed = json.parse(raw)?      # ? propagates ParseError up
+@readConfig+ func(@path str) -> Config:
+  @raw = fs.read(path)?              # ? propagates error up
+  @parsed = json.parse(raw)?         # ? propagates error up
   result = Config.from(parsed)
 
-fn divide*(a: int, b: int) -> int | !MathError:
+@divide+ func(@a int, @b int) -> int:
   if b == 0:
-    raise MathError.divByZero      # explicit error return
+    raise MathError.divByZero        # explicit error return
   result = a / b
 ```
 
-- `?` — propagates the error to the caller (if error types are compatible)
+- `?` — propagates the error to the caller
 - `raise` — explicitly returns an error and exits the function
 
 ### Handling errors (caller side)
 
-#### 1. `?` — propagate up (if the calling function also returns an error)
+Three levels — from shortest to most detailed:
+
+#### 1. `?` — propagate up
 
 ```
-fn loadApp*() -> App | !IoError | !ParseError:
-  let cfg = readConfig("app.toml")?   # error propagated
+@loadApp+ func() -> App:
+  @cfg = readConfig("app.toml")?     # error propagated to caller
   result = newApp(cfg)
 ```
 
-#### 2. `case` — handle all cases
+#### 2. `do...else` — handle inline
+
+`do` executes and checks the Result. If error — runs the `else` block.
+`@name` is bound before `else`, so the error is accessible via `.getError()`.
 
 ```
-let cfg = readConfig("app.toml")
-case cfg:
+# Handle error with access to it
+do @conn = connect("localhost", 8080) else:
+  echo("Failed: ", conn.getError())
+  quit()
+
+# Log and continue
+do @cfg = readConfig("app.toml") else:
+  echo("Config error: ", cfg.getError())
+
+# Fallback value
+do @cfg = readConfig("app.toml") else:
+  @cfg = Config.default()
+
+# One-liner
+do @conn = connect("localhost", 8080) else: quit()
+```
+
+#### 3. `case` — pattern match on all cases
+
+```
+case readConfig("app.toml"):
   of ok:
     start(cfg.get())
   of error(IoError.notFound):
@@ -1254,16 +1400,14 @@ case cfg:
     quit(cfg.getError())
 ```
 
-Exhaustiveness checking — compiler guarantees all variants are handled.
+### Summary
 
-#### 3. `else` with fallback value
-
-```
-let cfg = readConfig("app.toml") else:
-  Config.default()
-
-# cfg = either the read config or the default
-```
+| Syntax | What it does |
+|--------|-------------|
+| `?` | Propagate error to caller |
+| `do @x = f() else:` | Check Result, handle error inline |
+| `case` | Full pattern match on error types |
+| `raise` | Return an error from function |
 
 ## Tooling (built into compiler)
 
@@ -1322,10 +1466,10 @@ Minimal compiler that can compile basic Iris programs to C.
 ### Phase 4 — Collections + Strings
 
 - [ ] array[T, N] (stack)
-- [ ] seq[T] (heap), `~[...]` literal
+- [ ] Seq[T] (heap), `~[...]` literal
 - [ ] slice[T] (view)
 - [ ] string (immutable, SSO, interpolation in lexer)
-- [ ] StringBuf (mutable builder)
+- [ ] String (mutable builder)
 
 ### Phase 5 — Concurrency
 
