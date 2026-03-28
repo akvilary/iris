@@ -649,12 +649,7 @@ impl Parser {
             TokenKind::BoolLit(b) => { self.advance(); Ok(Expr::BoolLit(b)) }
             TokenKind::Ident(_) => { let name = self.parse_ident_name()?; Ok(Expr::Ident(name)) }
             TokenKind::StringInterpStart => self.parse_string_interp(),
-            TokenKind::LParen => {
-                self.advance();
-                let expr = self.parse_expr()?;
-                self.expect(&TokenKind::RParen)?;
-                Ok(expr)
-            }
+            TokenKind::LParen => self.parse_paren_or_tuple(),
             TokenKind::LBracket => {
                 self.advance();
                 let mut elems = Vec::new();
@@ -689,6 +684,64 @@ impl Parser {
                 })
             }
             _ => Err(self.error(format!("unexpected token {:?}", self.peek()))),
+        }
+    }
+
+    /// Parses `(expr)` or `(a, b)` or `(name: val, ...)` as grouping or tuple.
+    fn parse_paren_or_tuple(&mut self) -> CompileResult<Expr> {
+        self.advance(); // skip (
+
+        if self.at(&TokenKind::RParen) {
+            self.advance();
+            return Ok(Expr::TupleLit(Vec::new())); // empty tuple ()
+        }
+
+        // Try to detect named tuple: (name: val, ...)
+        let first_named = if let TokenKind::Ident(_) = self.peek().clone() {
+            let saved = self.pos;
+            self.advance();
+            if self.at(&TokenKind::Colon) {
+                self.pos = saved;
+                true
+            } else {
+                self.pos = saved;
+                false
+            }
+        } else {
+            false
+        };
+
+        if first_named {
+            // Named tuple
+            let mut elems = Vec::new();
+            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                let name = self.parse_ident_name()?;
+                self.expect(&TokenKind::Colon)?;
+                let val = self.parse_expr()?;
+                elems.push((Some(name), val));
+                if self.at(&TokenKind::Comma) { self.advance(); }
+            }
+            self.expect(&TokenKind::RParen)?;
+            return Ok(Expr::TupleLit(elems));
+        }
+
+        // First element
+        let first = self.parse_expr()?;
+
+        if self.at(&TokenKind::Comma) {
+            // Unnamed tuple: (a, b, ...)
+            self.advance();
+            let mut elems = vec![(None, first)];
+            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                elems.push((None, self.parse_expr()?));
+                if self.at(&TokenKind::Comma) { self.advance(); }
+            }
+            self.expect(&TokenKind::RParen)?;
+            Ok(Expr::TupleLit(elems))
+        } else {
+            // Just grouping: (expr)
+            self.expect(&TokenKind::RParen)?;
+            Ok(first)
         }
     }
 

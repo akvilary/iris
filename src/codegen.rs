@@ -548,6 +548,15 @@ impl CodeGen {
             Expr::StringInterp { parts } => self.gen_string_interp(parts),
             Expr::Dollar(inner) => self.gen_dollar(inner),
             Expr::Question(inner) => self.gen_expr(inner),
+            Expr::TupleLit(elems) => {
+                // Generate as C compound literal or just comma-separated
+                self.emit("(");
+                for (i, (_, val)) in elems.iter().enumerate() {
+                    if i > 0 { self.emit(", "); }
+                    self.gen_expr(val);
+                }
+                self.emit(")");
+            }
             Expr::ArrayLit(elems) | Expr::SeqLit(elems) => {
                 self.emit("{");
                 for (i, e) in elems.iter().enumerate() {
