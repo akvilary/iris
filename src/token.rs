@@ -16,12 +16,12 @@ pub enum TokenKind {
     Label(String),
 
     // Keywords
-    Fn, Let, Var, Const,
+    Func, Const, Mut,
     If, Elif, Else,
     While, For, In,
     Break, Continue, Return, Result,
     Block, Spawn, Detach,
-    Type, Enum, Concept,
+    Object, Enum, Concept,
     Import, From, Export,
     When, IsMain,
     Case, Of, Discard,
@@ -88,10 +88,9 @@ impl Token {
 impl TokenKind {
     pub fn from_keyword(word: &str) -> TokenKind {
         match word {
-            "fn" => TokenKind::Fn,
-            "let" => TokenKind::Let,
-            "var" => TokenKind::Var,
+            "func" => TokenKind::Func,
             "const" => TokenKind::Const,
+            "mut" => TokenKind::Mut,
             "if" => TokenKind::If,
             "elif" => TokenKind::Elif,
             "else" => TokenKind::Else,
@@ -105,7 +104,7 @@ impl TokenKind {
             "block" => TokenKind::Block,
             "spawn" => TokenKind::Spawn,
             "detach" => TokenKind::Detach,
-            "type" => TokenKind::Type,
+            "object" => TokenKind::Object,
             "enum" => TokenKind::Enum,
             "concept" => TokenKind::Concept,
             "import" => TokenKind::Import,

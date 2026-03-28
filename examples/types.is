@@ -1,25 +1,25 @@
 # Types and enums in Iris
 
-type Point*:
-  @x: int
-  @y: int
+@Point+ object:
+  @x+ int
+  @y+ int
 
-enum Color*:
+@Color+ enum:
   @red, @green, @blue
 
-enum HttpMethod*:
+@HttpMethod+ enum:
   @get = "GET"
   @post = "POST"
   @put = "PUT"
   @delete = "DELETE"
 
 # Create a point
-let p = Point(10, 20)
+@p = Point(10, 20)
 echo(p.x)
 echo(p.y)
 
 # Use enum
-let c = Color.red
+@c = Color.red
 echo(c)
 
 # Case

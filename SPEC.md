@@ -28,7 +28,7 @@ Top-level code executes directly, no `main` required:
 # hello.is — just runs
 echo("hello world")
 
-let x = 42
+@x = 42
 echo($x)
 ```
 
@@ -37,7 +37,7 @@ For libraries — `when isMain:` to run code only when file is executed directly
 
 ```
 # myLib.is
-fn helper*(x: int) -> int:
+@helper+ func(@x int) -> int:
   result = x + 1
 
 when isMain:
@@ -161,78 +161,81 @@ No automatic unwrapping — use `.get()` to extract the value.
 `else:` on expressions follows the same rule — enters else on none or error:
 
 ```
-let data = fetch(url) else:
+@data = fetch(url) else:
   defaultData()        # only if fetch returned none or error
 ```
 
 ## Variables
 
-| Keyword | Meaning | Example |
-|---------|---------|---------|
-| `const` | Evaluated at compile-time | `const maxSize = 1024` |
-| `let` | Immutable variable (runtime) | `let name = "Alice"` |
-| `var` | Mutable variable (runtime) | `var count = 0` |
+All declarations start with `@`. Immutable by default.
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `@name = value` | Immutable (runtime) | `@name = "Alice"` |
+| `@name mut = value` | Mutable (runtime) | `@count mut = 0` |
+| `@name const = value` | Constant (compile-time) | `@maxSize const = 1024` |
 
 ```
-const pi = 3.14159265              # compile-time, inlined
-const maxRetries* = 3              # compile-time, public
+@pi const = 3.14159265             # compile-time, inlined
+@maxRetries+ const = 3             # compile-time, public
 
-let user = getUser(id)             # runtime, cannot reassign
-# user = otherUser                 # ERROR: let cannot be reassigned
+@user = getUser(id)                # runtime, cannot reassign
+# user = otherUser                 # ERROR: immutable
 
-var counter = 0                    # runtime, mutable
+@counter mut = 0                   # runtime, mutable
 counter = counter + 1              # OK
 ```
 
-## Attributes
+## Declarations
 
-Type fields and enum variants are defined with `@` prefix.
-This allows using reserved words as names:
+All named declarations use `@` prefix. `+` after the name means public.
+This allows using reserved words as field/variant names.
 
 ```
-type User:
-  @name: string
-  @age: int
+@User+ object:
+  @name+ string
+  @age+ int
 
-type JsonResponse:
-  @for: string         # reserved word — OK with @
-  @type: string        # reserved word — OK with @
-  @data: int
+@Admin+ object of User:
+  @for string            # reserved word — OK with @
+  @type string           # reserved word — OK with @
+  @data int
 
-enum Status:
-  @ok, @error, @pending   # reserved words — OK with @
+@Status+ enum:
+  @ok, @error, @pending  # reserved words — OK with @
 ```
 
-Access fields the same way:
+Construction and access:
 ```
-let u = User(@name: "Alice", @age: 30)
+@u = User(name="Alice", age=30)
 echo(u.name)           # read field
+```
+
+Functions:
+```
+@add+ func(@a int, @b int) -> int:
+  result = a + b
+
+@sum = add(a=10, b=20)
 ```
 
 ## Visibility
 
-Public visibility via `*` after the name (like Nim):
+Public visibility via `+` after the name:
 
 ```
-fn helperFunc(x: int) -> int:        # private
-  x + 1
+@helperFunc func(@x int) -> int:       # private
+  result = x + 1
 
-fn processData*(x: int) -> int:      # public
-  helperFunc(x)
+@processData+ func(@x int) -> int:     # public
+  result = helperFunc(x)
 
-type Config*:
-  @host*: string        # public field
-  @port*: int           # public field
-  @secret: string       # private field
+@Config+ object:
+  @host+ string         # public field
+  @port+ int            # public field
+  @secret string        # private field
 
-type Shape*:
-  Circle(radius: float)
-  Rect(w: float, h: float)
-
-concept Drawable*:
-  fn draw(self)
-
-const maxRetries* = 3
+@maxRetries+ const = 3
 ```
 
 ## Module System
@@ -243,7 +246,7 @@ const maxRetries* = 3
 import net
 
 # Must use module name:
-let conn = net.connect("localhost", 8080)
+@conn = net.connect("localhost", 8080)
 
 # NOT allowed:
 # connect("localhost", 8080)   <- compile error
@@ -255,7 +258,7 @@ let conn = net.connect("localhost", 8080)
 from net import connect, listen
 
 # Now available directly:
-let conn = connect("localhost", 8080)
+@conn = connect("localhost", 8080)
 ```
 
 ### From export — re-export from nested modules
@@ -275,31 +278,31 @@ export myLib.internal.parser
 
 ### Named Arguments
 
-Arguments can be passed by name. Order doesn't matter for named arguments:
+Arguments can be passed by name using `=`. Order doesn't matter for named arguments:
 
 ```
-fn createUser*(name: string, age: int) -> User:
-  result = User(@name: name, @age: age)
+@createUser+ func(@name string, @age int) -> User:
+  result = User(name=name, age=age)
 
 # Positional (by order):
-let u = createUser("Alice", 30)
+@u = createUser("Alice", 30)
 
 # Named (order doesn't matter):
-let u = createUser(name: "Alice", age: 30)
-let u = createUser(age: 30, name: "Alice")
+@u = createUser(name="Alice", age=30)
+@u = createUser(age=30, name="Alice")
 
 # Mixed — positional first, then named:
-let u = createUser("Alice", age: 30)
+@u = createUser("Alice", age=30)
 ```
 
-###
+### Declaration
 
 ```
-fn funcName*(param1: Type1, param2: Type2) -> ReturnType | !ErrorType:
+@funcName+ func(@param1 Type1, @param2 Type2) -> ReturnType | !ErrorType:
   ...
 ```
 
-- `*` after name = public
+- `+` after name = public
 - `| !ErrorType` = function can return an error (result union)
 - Multiple error types: `-> ReturnType | !ErrA | !ErrB`
 - `?` operator for error propagation
@@ -310,15 +313,15 @@ fn funcName*(param1: Type1, param2: Type2) -> ReturnType | !ErrorType:
 Return value is set explicitly:
 
 ```
-fn add*(a: int, b: int) -> int:
+@add+ func(@a int, @b int) -> int:
   result = a + b
 
-fn findUser*(id: int) -> User | !NotFoundError:
-  let user = db.query(id)?
+@findUser+ func(@id int) -> User | !NotFoundError:
+  @user = db.query(id)?
   result = user
 
 # result can be set anywhere, including branches:
-fn classify*(n: int) -> string:
+@classify+ func(@n int) -> string:
   if n > 0:
     result = "positive"
   elif n < 0:
@@ -327,14 +330,14 @@ fn classify*(n: int) -> string:
     result = "zero"
 
 # result can be set early and execution continues:
-fn process*(data: slice[byte]) -> int:
+@process+ func(@data slice[byte]) -> int:
   result = 0
   for b in data:
     result = result + b.toInt()
   log("sum computed")    # runs after, result already set
 
 # return — early exit (uses current result value):
-fn search*(list: slice[int], target: int) -> int:
+@search+ func(@list slice[int], @target int) -> int:
   result = -1
   for i, val in list:
     if val == target:
@@ -350,49 +353,47 @@ Every variable lives until the end of its scope (function or block).
 When the scope ends, the variable is destroyed. No GC, no reference counting.
 The compiler verifies all of this automatically.
 
+All objects are value types. Use `&` for explicit references.
+No `ref object` — only `object`, with `&` to pass by reference.
+
 **When to use `Pool`:** only when you have cyclic references
 (A references B and B references A). Everything else is automatic.
 
-### Ownership + Borrow Checker
+### References and Mutability
 
-Default is immutable borrow. Annotations for other modes:
+Default is pass by value. Use `&` for references, `mut` for mutability:
 
-| Annotation | Meaning | Rust equivalent |
-|------------|---------|-----------------|
-| *(none)* | Immutable borrow | `&T` |
-| `var` | Mutable borrow | `&mut T` |
-| `own` | Take ownership (immutable) | `T` |
-| `own var` | Take ownership + mutable | `mut T` |
+| Syntax | Meaning | Rust equivalent |
+|--------|---------|-----------------|
+| `@param Type` | By value (immutable) | `T` |
+| `@param &Type` | By reference (immutable) | `&T` |
+| `@param mut &Type` | By reference (mutable) | `&mut T` |
 
 ```
-fn length(s: string) -> int:             # immutable borrow (default)
-  s.len
+@length func(@s string) -> int:           # by value (default)
+  result = s.len
 
-fn sort(var list: slice[int]):           # mutable borrow
+@sort func(@list mut &slice[int]):        # mutable reference
   ...
 
-fn send(own msg: Message):              # take ownership
+@send func(@msg Message):                 # by value (ownership transfer)
   channel.push(msg)
-
-fn normalize(own var data: slice[byte]) -> slice[byte]:  # own + mutate
-  data.trim()
-  data
 ```
 
 #### Regular code — just write code, everything is automatic
 
 ```
-fn handle(request: Request) -> Response | !Error:
-  let user = db.getUser(request.userId)?
-  let posts = db.getPosts(user.id)?
+@handle func(@request Request) -> Response | !Error:
+  @user = db.getUser(request.userId)?
+  @posts = db.getPosts(user.id)?
   result = newResponse(user, posts)
 # <- user, posts, everything destroyed automatically
 
-fn process():
-  let a = "hello"
-  let b = "world"
-  let long = longest(a, b)    # compiler knows: a, b, long same scope
-  echo(long)                   # OK
+@process func():
+  @a = "hello"
+  @b = "world"
+  @long = longest(a, b)    # compiler knows: a, b, long same scope
+  echo(long)                # OK
 # <- a, b, long destroyed
 ```
 
@@ -409,7 +410,7 @@ No annotations needed. Compiler applies simple rules:
 
 ```
 # Rule 1 — owned return, no concern:
-fn length(s: string) -> int:
+@length func(@s string) -> int:
   result = s.len
 
 # Rule 2 — one borrow param, obvious:
@@ -417,13 +418,13 @@ fn firstWord(s: string) -> string:
   result = s.split(" ")[0]       # tied to s
 
 # Rule 3 — multiple borrows, tied to all:
-fn longest(x: string, y: string) -> string:
+@longest func(@x string, @y string) -> string:
   result = if x.len > y.len: x else: y
   # compiler: result tied to both x AND y
 
-let a = "hello"
-let b = "world"
-let long = longest(a, b)        # OK: a, b, long same scope
+@a = "hello"
+@b = "world"
+@long = longest(a, b)        # OK: a, b, long same scope
 ```
 
 No function body analysis needed. Fast compilation. Separate module compilation.
@@ -440,18 +441,18 @@ when it goes out of scope. All allocated data freed in O(1).
 
 ```
 # Cyclic references — need Pool:
-fn buildDom() -> string:
-  let pool = newPool()
-  let parent = pool.alloc(Element("div"))
-  let child = pool.alloc(Element("span"))
+@buildDom func() -> string:
+  @pool = newPool()
+  @parent = pool.alloc(Element("div"))
+  @child = pool.alloc(Element("span"))
   parent.addChild(child)    # parent -> child
   child.parent = parent      # child -> parent (cycle!)
   result = parent.render().clone()
 # <- pool goes out of scope, all memory freed in O(1)
 
 # NOT cyclic — no pool needed, just regular code:
-fn buildList() -> string:
-  let items = newSeq[Item]()
+@buildList func() -> string:
+  @items mut = newSeq[Item]()
   items.add(Item("first"))
   items.add(Item("second"))     # items owns the data, no cycles
   result = items.toString()
@@ -470,45 +471,45 @@ If not — they are independent and live in separate pools.
 
 ```
 # Create pool, build graph, use it, pass further
-let pool = newPool()
-let root = buildGraph(pool)
+@pool = newPool()
+@root = buildGraph(pool)
 traverse(root)
 printTree(root)
 # <- pool goes out of scope, all memory freed
 
-fn buildGraph(pool: Pool) -> Node:
-  let a = pool.alloc(Node("A"))
-  let b = pool.alloc(Node("B"))
-  let c = pool.alloc(Node("C"))
+@buildGraph func(@pool Pool) -> Node:
+  @a = pool.alloc(Node("A"))
+  @b = pool.alloc(Node("B"))
+  @c = pool.alloc(Node("C"))
   a.neighbors.add(b)
   b.neighbors.add(c)
   c.neighbors.add(a)   # cycle!
   result = a
 
-fn traverse(node: Node):
+@traverse func(@node Node):
   echo($node.name)
   for child in node.children:
     traverse(child)
 
-fn printTree(node: Node):
+@printTree func(@node Node):
   echo("Tree root: {node.name}")
 
 # Two independent graphs — two separate pools
-let userPool = newPool()
-let users = buildUserGraph(userPool)
+@userPool = newPool()
+@users = buildUserGraph(userPool)
 processUsers(users)
 
-let rolePool = newPool()
-let roles = buildRoleGraph(rolePool)
+@rolePool = newPool()
+@roles = buildRoleGraph(rolePool)
 processRoles(roles)
 
 # Multiple pools passed to one function
-fn mergeGraphs(src: Pool, dst: Pool) -> Node:
-  let srcRoot = buildGraph(src)
-  let dstRoot = buildGraph(dst)
+@mergeGraphs func(@src Pool, @dst Pool) -> Node:
+  @srcRoot = buildGraph(src)
+  @dstRoot = buildGraph(dst)
   # srcRoot and dstRoot cannot link to each other (cross-pool forbidden)
   # but we can clone data from one to another:
-  let copy = srcRoot.clone()
+  @copy = srcRoot.clone()
   dst.alloc(copy)
   result = dstRoot
 ```
@@ -866,7 +867,7 @@ fn toString(self: User) -> string:
 ### Generics
 
 ```
-fn map[T, U](list: slice[T], f: fn(T) -> U) -> seq[U]:
+fn map[T, U](list: slice[T], f: func(T) -> U) -> seq[U]:
   result = [f(x) for x in list]
 
 # With concept constraint (optional):
@@ -973,7 +974,7 @@ Behavior is determined by contents, not by different keywords.
 
 ```
 # Exit from nested loops
-block `search:
+*block `search:
   for item in list1:
     for item2 in list2:
       if item == item2:
@@ -981,7 +982,7 @@ block `search:
   echo("not found")
 
 # Nested named blocks
-block `outer:
+*block `outer:
   for i in 0..100:
     block `inner:
       if i == 50:
@@ -994,7 +995,7 @@ block `outer:
 ### Block as expression (returns a value)
 
 ```
-let count = block `b:
+@count = block `b:
   if users.isEmpty:
     result = 0
     break `b

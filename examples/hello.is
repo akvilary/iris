@@ -1,8 +1,8 @@
 # Hello World in Iris
 echo("hello world")
 
-let name = "Alice"
-let age = 30
+@name = "Alice"
+@age = 30
 echo("Hello, {name}!")
 
 if age > 18:
@@ -13,8 +13,8 @@ else:
 for i in 0..<10:
   echo(i)
 
-fn add*(a: int, b: int) -> int:
+@add+ func(@a int,@b int) -> int:
   result = a + b
 
-let sum = add(10, 20)
+@sum+ = add(a=10, b=20)
 echo(sum)

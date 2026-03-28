@@ -49,6 +49,7 @@ pub enum Expr {
     },
     Dollar(Box<Expr>),
     Question(Box<Expr>),
+    Ref(Box<Expr>),          // &value
 }
 
 #[derive(Debug, Clone)]
@@ -89,22 +90,12 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    // Variable declarations
-    LetDecl {
-        name: String,
-        type_ann: Option<TypeExpr>,
-        value: Option<Expr>,
-    },
-    VarDecl {
-        name: String,
-        type_ann: Option<TypeExpr>,
-        value: Option<Expr>,
-    },
-    ConstDecl {
+    // Variable declarations: name@ = val, name@ mut = val, name@ const = val
+    Decl {
         name: String,
         public: bool,
-        type_ann: Option<TypeExpr>,
-        value: Expr,
+        modifier: DeclModifier,
+        value: Option<Expr>,
     },
 
     // Assignment
@@ -116,7 +107,7 @@ pub enum Stmt {
         value: Expr,
     },
 
-    // Functions
+    // Functions: name@ fn(params) -> RetType:
     FnDecl {
         name: String,
         public: bool,
@@ -156,10 +147,11 @@ pub enum Stmt {
     // Expressions as statements
     ExprStmt(Expr),
 
-    // Type declarations
-    TypeDecl {
+    // Type declarations: Name@ object: / Name@ enum:
+    ObjectDecl {
         name: String,
         public: bool,
+        parent: Option<String>,
         fields: Vec<TypeField>,
     },
     EnumDecl {
@@ -202,18 +194,17 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone)]
-pub struct Param {
-    pub name: String,
-    pub type_ann: TypeExpr,
-    pub ownership: Ownership,
+pub enum DeclModifier {
+    Default,  // immutable (x@ = 42)
+    Mut,      // mutable   (x@ mut = 42)
+    Const,    // constant  (x@ const = 42)
 }
 
 #[derive(Debug, Clone)]
-pub enum Ownership {
-    Borrow,    // default
-    VarBorrow, // var
-    Own,       // own
-    OwnVar,    // own var
+pub struct Param {
+    pub name: String,
+    pub mutable: bool,
+    pub type_ann: TypeExpr,
 }
 
 #[derive(Debug, Clone)]
@@ -274,4 +265,5 @@ pub enum TypeExpr {
         ok_type: Box<TypeExpr>,
         error_types: Vec<TypeExpr>,
     },
+    Ref(Box<TypeExpr>),  // &Type
 }

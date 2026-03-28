@@ -1,36 +1,36 @@
 # Iris features demo
 
 # Bool
-let isReady = true
-let isDone = false
+@isReady = true
+@isDone = false
 echo(isReady)
 echo(isDone)
 
 # Float
-let pi = 3.14159
+@pi = 3.14159
 echo(pi)
 
 # String interpolation
-let name = "Iris"
-let version = 1
+@name = "Iris"
+@version = 1
 echo("Welcome to {name}!")
 
 # $ operator on enum
-enum HttpMethod*:
+@HttpMethod+ enum:
   @get = "GET"
   @post = "POST"
 
-let method = HttpMethod.get
+@method = HttpMethod.get
 echo($method)
 
 # Bool in interpolation
 echo("Ready: {isReady}")
 
 # Nested function calls
-fn twice*(n: int) -> int:
+@twice+ func(@n int) -> int:
   result = n * 2
 
-fn quadruple*(n: int) -> int:
+@quadruple+ func(@n int) -> int:
   result = twice(twice(n))
 
 echo(quadruple(5))

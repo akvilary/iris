@@ -7,8 +7,8 @@ pub struct CodeGen {
     output: String,
     indent: usize,
     var_types: HashMap<String, String>,
-    type_fields: HashMap<String, Vec<String>>,  // type name -> field names
-    enum_names: Vec<String>,                     // known enum type names
+    type_fields: HashMap<String, Vec<(String, String)>>,  // type name -> [(field_name, c_type)]
+    enum_names: Vec<String>,
 }
 
 impl CodeGen {
@@ -61,6 +61,9 @@ impl CodeGen {
                 "rune" => "int32_t",
                 other => other,
             }.to_string(),
+            TypeExpr::Ref(inner) => {
+                format!("{}*", self.type_to_c(inner))
+            }
             TypeExpr::Generic { name, args } => {
                 let args_str = args.iter()
                     .map(|a| self.type_to_c(a))
@@ -70,10 +73,6 @@ impl CodeGen {
             }
             _ => "void".to_string(),
         }
-    }
-
-    fn is_string_type(&self, name: &str) -> bool {
-        self.var_types.get(name).map(|t| t == "const char*").unwrap_or(false)
     }
 
     fn var_c_type(&self, name: &str) -> Option<&str> {
@@ -96,8 +95,6 @@ impl CodeGen {
         }
     }
 
-    // ── C string escaping ──
-
     fn escape_c_string(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         for ch in s.chars() {
@@ -112,8 +109,6 @@ impl CodeGen {
         }
         out
     }
-
-    // ── Params formatting ──
 
     fn format_params(&self, params: &[Param]) -> String {
         if params.is_empty() {
@@ -135,7 +130,7 @@ impl CodeGen {
         self.emit("#include <string.h>\n");
         self.emit("#include <stdlib.h>\n\n");
 
-        // Forward declarations
+        // Forward declarations for functions
         let decls: Vec<String> = stmts.iter().filter_map(|s| {
             if let Stmt::FnDecl { name, params, return_type, .. } = s {
                 let ret = return_type.as_ref().map(|t| self.type_to_c(t)).unwrap_or_else(|| "void".to_string());
@@ -153,9 +148,12 @@ impl CodeGen {
 
         // Types and enums first
         for stmt in stmts {
-            if matches!(stmt, Stmt::TypeDecl { .. } | Stmt::EnumDecl { .. }) {
-                self.gen_stmt(stmt);
-                self.emit("\n");
+            match stmt {
+                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } => {
+                    self.gen_stmt(stmt);
+                    self.emit("\n");
+                }
+                _ => {}
             }
         }
 
@@ -167,7 +165,7 @@ impl CodeGen {
                     self.gen_stmt(stmt);
                     self.emit("\n");
                 }
-                Stmt::TypeDecl { .. } | Stmt::EnumDecl { .. } => {} // already emitted
+                Stmt::ObjectDecl { .. } | Stmt::EnumDecl { .. } => {} // already emitted
                 _ => top_level.push(stmt),
             }
         }
@@ -190,17 +188,22 @@ impl CodeGen {
 
     fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::LetDecl { name, type_ann, value }
-            | Stmt::VarDecl { name, type_ann, value } => {
-                self.gen_var_decl(name, type_ann, value);
-            }
-            Stmt::ConstDecl { name, value, .. } => {
-                let c_type = self.infer_c_type(value);
-                self.var_types.insert(name.clone(), c_type.clone());
-                self.emit_indent();
-                self.emit(&format!("const {} {} = ", c_type, name));
-                self.gen_expr(value);
-                self.emit(";\n");
+            Stmt::Decl { name, modifier, value, .. } => {
+                match modifier {
+                    DeclModifier::Const => {
+                        if let Some(val) = value {
+                            let c_type = self.infer_c_type(val);
+                            self.var_types.insert(name.clone(), c_type.clone());
+                            self.emit_indent();
+                            self.emit(&format!("const {} {} = ", c_type, name));
+                            self.gen_expr(val);
+                            self.emit(";\n");
+                        }
+                    }
+                    _ => {
+                        self.gen_var_decl(name, value);
+                    }
+                }
             }
             Stmt::Assign { target, value } => {
                 self.emit_indent();
@@ -245,18 +248,20 @@ impl CodeGen {
                 self.gen_expr(expr);
                 self.emit(";\n");
             }
-            Stmt::TypeDecl { name, fields, .. } => self.gen_type_decl(name, fields),
-            Stmt::EnumDecl { name, variants, .. } => self.gen_enum_decl(name, variants),
+            Stmt::ObjectDecl { name, parent, fields, .. } => {
+                self.gen_object_decl(name, parent, fields);
+            }
+            Stmt::EnumDecl { name, variants, .. } => {
+                self.gen_enum_decl(name, variants);
+            }
             Stmt::Case { expr, branches, else_body } => self.gen_case(expr, branches, else_body),
             Stmt::Discard => self.emit_line("(void)0;"),
             _ => self.emit_line("/* not yet implemented */"),
         }
     }
 
-    fn gen_var_decl(&mut self, name: &str, type_ann: &Option<TypeExpr>, value: &Option<Expr>) {
-        let c_type = if let Some(t) = type_ann {
-            self.type_to_c(t)
-        } else if let Some(val) = value {
+    fn gen_var_decl(&mut self, name: &str, value: &Option<Expr>) {
+        let c_type = if let Some(val) = value {
             self.infer_c_type(val)
         } else {
             "int64_t".to_string()
@@ -361,19 +366,37 @@ impl CodeGen {
         }
     }
 
-    fn gen_type_decl(&mut self, name: &str, fields: &[TypeField]) {
-        self.type_fields.insert(
-            name.to_string(),
-            fields.iter().map(|f| f.name.clone()).collect(),
-        );
+    // ── Type codegen ──
+
+    fn gen_object_decl(&mut self, name: &str, parent: &Option<String>, fields: &[TypeField]) {
+        let mut all_fields: Vec<(String, String)> = Vec::new();
+
+        // Inherit parent fields
+        if let Some(parent_name) = parent {
+            if let Some(parent_fields) = self.type_fields.get(parent_name).cloned() {
+                all_fields.extend(parent_fields);
+            }
+        }
+
         self.emit("typedef struct {\n");
         self.indent += 1;
+
+        // Emit parent fields
+        for (fname, ftype) in &all_fields {
+            self.emit_line(&format!("{} {};", ftype, fname));
+        }
+
+        // Emit own fields
         for f in fields {
             let c_type = self.type_to_c(&f.type_ann);
             self.emit_line(&format!("{} {};", c_type, f.name));
+            all_fields.push((f.name.clone(), c_type));
         }
+
         self.indent -= 1;
         self.emit(&format!("}} {};\n", name));
+
+        self.type_fields.insert(name.to_string(), all_fields);
     }
 
     fn gen_enum_decl(&mut self, name: &str, variants: &[EnumVariant]) {
@@ -458,11 +481,9 @@ impl CodeGen {
     fn gen_case_label(&mut self, pattern: &CasePattern) {
         match pattern {
             CasePattern::Variant(name) => {
-                // Color.red → Color_red in C
                 let c_name = name.replace('.', "_");
                 self.emit_line(&format!("case {}:", c_name));
             }
-            // Ok/Error/Some/None require runtime type info — not yet implemented
             _ => self.emit_line("/* pattern not yet implemented */"),
         }
     }
@@ -500,17 +521,20 @@ impl CodeGen {
                 self.emit(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!" });
                 self.gen_expr(expr);
             }
+            Expr::Ref(inner) => {
+                self.emit("&");
+                self.gen_expr(inner);
+            }
             Expr::Call { func, args } => {
                 if let Expr::Ident(name) = func.as_ref() {
                     if name == "echo" { return self.gen_echo(args); }
-                    // Struct constructor: Point(10, 20) → (Point){.x = 10, .y = 20}
                     if let Some(fields) = self.type_fields.get(name).cloned() {
                         self.emit(&format!("({}){{", name));
                         for (i, arg) in args.iter().enumerate() {
                             if i > 0 { self.emit(", "); }
                             if let Some(fname) = arg.name.as_ref() {
                                 self.emit(&format!(".{} = ", fname));
-                            } else if let Some(fname) = fields.get(i) {
+                            } else if let Some((fname, _)) = fields.get(i) {
                                 self.emit(&format!(".{} = ", fname));
                             }
                             self.gen_expr(&arg.value);
@@ -528,7 +552,6 @@ impl CodeGen {
                 self.emit(")");
             }
             Expr::FieldAccess { expr, field } => {
-                // Enum access: Color.red → Color_red in C
                 if let Expr::Ident(name) = expr.as_ref() {
                     if self.enum_names.contains(name) {
                         self.emit(&format!("{}_{}", name, field));
@@ -549,7 +572,6 @@ impl CodeGen {
             Expr::Dollar(inner) => self.gen_dollar(inner),
             Expr::Question(inner) => self.gen_expr(inner),
             Expr::TupleLit(elems) => {
-                // Generate as C compound literal or just comma-separated
                 self.emit("(");
                 for (i, (_, val)) in elems.iter().enumerate() {
                     if i > 0 { self.emit(", "); }
@@ -621,7 +643,6 @@ impl CodeGen {
         self.emit(")");
     }
 
-    /// Emit a value for printf, wrapping bools and $ conversions.
     fn gen_echo_arg(&mut self, expr: &Expr) {
         match expr {
             Expr::BoolLit(b) => {
@@ -637,7 +658,6 @@ impl CodeGen {
         }
     }
 
-    /// $ operator — convert to string representation.
     fn gen_dollar(&mut self, expr: &Expr) {
         match expr {
             Expr::Ident(name) => {
@@ -645,14 +665,12 @@ impl CodeGen {
                     Some("bool") => self.emit(&format!("({} ? \"true\" : \"false\")", name)),
                     Some("const char*") => self.emit(name),
                     _ => {
-                        // For enum types with _to_string, use that
                         for en in &self.enum_names.clone() {
                             if self.var_c_type(name) == Some(en.as_str()) {
                                 self.emit(&format!("{}_to_string({})", en, name));
                                 return;
                             }
                         }
-                        // Default: emit as-is (will need snprintf for full support)
                         self.emit(name);
                     }
                 }
@@ -662,8 +680,6 @@ impl CodeGen {
     }
 
     fn gen_string_interp(&mut self, parts: &[StringPart]) {
-        // For non-echo contexts, generate snprintf or inline concatenation
-        // For now, emit as a string literal (simplified)
         self.emit("\"");
         for part in parts {
             match part {
@@ -690,7 +706,6 @@ impl CodeGen {
             },
             Expr::Call { func, .. } => {
                 if let Expr::Ident(name) = func.as_ref() {
-                    // Struct constructor
                     if self.type_fields.contains_key(name) {
                         return name.to_string();
                     }
@@ -699,7 +714,6 @@ impl CodeGen {
                 "int64_t"
             }
             Expr::FieldAccess { expr, .. } => {
-                // Color.red → type is Color
                 if let Expr::Ident(name) = expr.as_ref() {
                     if self.enum_names.contains(name) {
                         return name.clone();
