@@ -16,7 +16,7 @@
 *echo("Welcome to {name}!")
 
 # $ operator on enum
-@HttpMethod+ enum:
+@HttpMethod! enum:
   @get = "GET"
   @post = "POST"
 
@@ -27,10 +27,10 @@
 *echo("Ready: {isReady}")
 
 # Nested function calls
-@twice+ func(@n int) -> int:
+@twice! func(@n int) ok int:
   result = n * 2
 
-@quadruple+ func(@n int) -> int:
+@quadruple! func(@n int) ok int:
   result = twice(twice(n))
 
 *echo(quadruple(5))

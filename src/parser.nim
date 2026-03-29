@@ -69,7 +69,7 @@ proc parseAtName(P: var Parser): AtName =
   else:
     P.error("expected name after @")
 
-  let public = if P.at(tkPlus): discard P.advance(); true else: false
+  let public = if P.at(tkBang): discard P.advance(); true else: false
   AtName(name: name, public: public)
 
 proc parseAtIdent(P: var Parser): string =
@@ -445,14 +445,16 @@ proc parseDecl(P: var Parser): Stmt =
     P.expect(tkRParen)
     var returnType: TypeExpr = nil
     var errorTypes: seq[TypeExpr]
-    if P.at(tkArrow):
+    if P.at(tkOk):
       discard P.advance()
       returnType = P.parseType()
-      # Parse | !Error1 | !Error2
-      while P.at(tkPipe):
+      # Parse else Error1, Error2
+      while P.at(tkElse):
         discard P.advance()
-        P.expect(tkBang)
         errorTypes.add(P.parseType())
+        while P.at(tkComma):
+          discard P.advance()
+          errorTypes.add(P.parseType())
     P.expect(tkColon)
     P.skipNewlines()
     let body = P.parseBlockBody()
@@ -624,14 +626,13 @@ proc parseCase(P: var Parser): Stmt =
       # Parse pattern — short name only
       var pat: CasePattern
       case P.peek()
-      of tkIdent:
-        let name = P.advance().strVal
-        case name
-        of "ok", "Ok": pat = CasePattern(kind: patOk)
-        of "error": pat = CasePattern(kind: patError)
-        else: pat = CasePattern(kind: patVariant, name: name)
+      of tkOk: discard P.advance(); pat = CasePattern(kind: patOk)
       of tkSome: discard P.advance(); pat = CasePattern(kind: patSome)
       of tkNone: discard P.advance(); pat = CasePattern(kind: patNone)
+      of tkIdent:
+        let name = P.advance().strVal
+        if name == "error": pat = CasePattern(kind: patError)
+        else: pat = CasePattern(kind: patVariant, name: name)
       else: P.error("expected case pattern")
       P.expect(tkColon); P.skipNewlines()
       branches.add(CaseBranch(pattern: pat, body: P.parseBlockBody()))

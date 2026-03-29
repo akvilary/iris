@@ -1,10 +1,10 @@
 # Object variants (tagged union)
 
-@ShapeKind+ enum:
+@ShapeKind! enum:
   @circle, @rect, @point
 
 # Object with common fields + variant
-@Shape+ object:
+@Shape! object:
   @x int
   @y int
   case @kind ShapeKind:

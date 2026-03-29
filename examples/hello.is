@@ -13,8 +13,8 @@ else:
 for @i in 0..<10:
   *echo(i)
 
-@add+ func(@a int,@b int) -> int:
+@add! func(@a int,@b int) ok int:
   result = a + b
 
-@sum+ = add(a=10, b=20)
+@sum! = add(a=10, b=20)
 *echo(sum)

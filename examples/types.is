@@ -1,13 +1,13 @@
 # Types and enums in Iris
 
-@Point+ object:
-  @x+ int
-  @y+ int
+@Point! object:
+  @x! int
+  @y! int
 
-@Color+ enum:
+@Color! enum:
   @red, @green, @blue
 
-@HttpMethod+ enum:
+@HttpMethod! enum:
   @get = "GET"
   @post = "POST"
   @put = "PUT"

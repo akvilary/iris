@@ -37,7 +37,7 @@ For libraries — `when isMain:` to run code only when file is executed directly
 
 ```
 # myLib.is
-@helper+ func(@x int) -> int:
+@helper! func(@x int) ok int:
   result = x + 1
 
 when isMain:
@@ -133,7 +133,7 @@ else:
 
 ## Truthiness
 
-`if x` only works on `bool`, `Option[T]`, and result unions (`T | !E`).
+`if x` only works on `bool`, `Option[T]`, and result unions (`T else E`).
 Other types require explicit comparison — compiler error otherwise.
 
 ```
@@ -179,7 +179,7 @@ All declarations start with `@`. Immutable by default.
 
 ```
 @pi const = 3.14159265             # compile-time, inlined
-@maxRetries+ const = 3             # compile-time, public
+@maxRetries! const = 3             # compile-time, public
 
 @user = getUser(id)                # runtime, cannot reassign
 # user = otherUser                 # ERROR: immutable
@@ -190,20 +190,20 @@ counter = counter + 1              # OK
 
 ## Declarations
 
-All named declarations use `@` prefix. `+` after the name means public.
+All named declarations use `@` prefix. `!` after the name means public.
 This allows using reserved words as field/variant names.
 
 ```
-@User+ object:
-  @name+ string
-  @age+ int
+@User! object:
+  @name! string
+  @age! int
 
-@Admin+ object of User:
+@Admin! object of User:
   @for str            # reserved word — OK with @
   @type str           # reserved word — OK with @
   @data int
 
-@Status+ enum:
+@Status! enum:
   @ok, @error, @pending  # reserved words — OK with @
 ```
 
@@ -215,7 +215,7 @@ Construction and access:
 
 Functions:
 ```
-@add+ func(@a int, @b int) -> int:
+@add! func(@a int, @b int) ok int:
   result = a + b
 
 @sum = add(a=10, b=20)
@@ -223,21 +223,21 @@ Functions:
 
 ## Visibility
 
-Public visibility via `+` after the name:
+Public visibility via `!` after the name:
 
 ```
-@helperFunc func(@x int) -> int:       # private
+@helperFunc func(@x int) ok int:       # private
   result = x + 1
 
-@processData+ func(@x int) -> int:     # public
+@processData! func(@x int) ok int:     # public
   result = helperFunc(x)
 
-@Config+ object:
-  @host+ string         # public field
-  @port+ int            # public field
+@Config! object:
+  @host! string         # public field
+  @port! int            # public field
   @secret str        # private field
 
-@maxRetries+ const = 3
+@maxRetries! const = 3
 ```
 
 ## Module System
@@ -291,7 +291,7 @@ export myLib.internal.parser
 Arguments can be passed by name using `=`. Order doesn't matter for named arguments:
 
 ```
-@createUser+ func(@name str, @age int) -> User:
+@createUser! func(@name str, @age int) ok User:
   result = User(name=name, age=age)
 
 # Positional (by order):
@@ -309,17 +309,17 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 
 ```
 # Pure function (no errors):
-@funcName+ func(@param1 Type1, @param2 Type2) -> ReturnType:
+@funcName! func(@param1 Type1, @param2 Type2) ok ReturnType:
   ...
 
-# Function with errors — ! marks error types:
-@funcName+ func(@param1 Type1) -> ReturnType | !Error1 | !Error2:
+# Function with errors:
+@funcName! func(@param1 Type1) ok ReturnType else Error1, Error2:
   ...
 ```
 
-- `+` after name = public
-- `-> T` — pure function, cannot raise
-- `-> T | !E1 | !E2` — can raise E1 or E2, compiler checks
+- `!` after name = public
+- `ok T` — pure function, cannot raise
+- `ok T else E1, E2` — can raise E1 or E2, compiler checks
 - `.get()` to unwrap result — always explicit, no auto-unwrap
 - `?` operator for error propagation
 - `raise` to return an error
@@ -330,15 +330,15 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 Return value is set explicitly:
 
 ```
-@add+ func(@a int, @b int) ok int:
+@add! func(@a int, @b int) ok int:
   result = a + b
 
-@findUser+ func(@id int) ok User else NotFoundError:
+@findUser! func(@id int) ok User else NotFoundError:
   @user = db.query(id)?
   result = user
 
 # result can be set anywhere, including branches:
-@classify+ func(@n int) ok String:
+@classify! func(@n int) ok String:
   if n > 0:
     result = String("positive")
   elif n < 0:
@@ -347,14 +347,14 @@ Return value is set explicitly:
     result = String("zero")
 
 # result can be set early and execution continues:
-@process+ func(@data slice[byte]) -> int:
+@process! func(@data slice[byte]) ok int:
   result = 0
   for b in data:
     result = result + b.toInt()
   log("sum computed")    # runs after, result already set
 
 # return — early exit (uses current result value):
-@search+ func(@list slice[int], @target int) -> int:
+@search! func(@list slice[int], @target int) ok int:
   result = -1
   for i, val in list:
     if val == target:
@@ -438,7 +438,7 @@ No `&` in the language — the compiler handles it.
 | `@param own Type` | Takes ownership (move) |
 
 ```
-@length func(@s str) -> int:          # immutable ref (auto)
+@length func(@s str) ok int:          # immutable ref (auto)
   result = s.len
 
 @sort func(@list mut slice[int]):     # mutable ref — can modify caller's data
@@ -456,7 +456,7 @@ The borrow checker ensures:
 #### Regular code — just write code, everything is automatic
 
 ```
-@handle func(@request Request) -> Response | !Error:
+@handle func(@request Request) ok Response else Error:
   @user = db.getUser(request.userId)?
   @posts = db.getPosts(user.id)?
   result = newResponse(user, posts)
@@ -483,15 +483,15 @@ No annotations needed. Compiler applies simple rules:
 
 ```
 # Rule 1 — owned return, no concern:
-@length func(@s str) -> int:
+@length func(@s str) ok int:
   result = s.len
 
 # Rule 2 — one borrow param, obvious:
-@firstWord func(@s str) -> str:
+@firstWord func(@s str) ok str:
   result = s.split(" ")[0]       # tied to s
 
 # Rule 3 — multiple borrows, tied to all:
-@longest func(@x str, @y str) -> str:
+@longest func(@x str, @y str) ok str:
   result = if x.len > y.len: x else: y
   # compiler: result tied to both x AND y
 
@@ -524,12 +524,12 @@ process(buf)
 # <- pool goes out of scope, buf freed
 
 # Recursive type — needs heap for known size:
-@Node+ object:
-  @value+ int
-  @next+ Pool       # child nodes allocated in same pool
+@Node! object:
+  @value! int
+  @next! Pool       # child nodes allocated in same pool
 
 # Cyclic references:
-@buildDom func() -> str:
+@buildDom func() ok str:
   @pool = newPool()
   @parent = pool.alloc(Element("div"))
   @child = pool.alloc(Element("span"))
@@ -539,7 +539,7 @@ process(buf)
 # <- pool goes out of scope, all memory freed in O(1)
 
 # Regular code — no pool needed:
-@buildList func() -> str:
+@buildList func() ok str:
   @items mut = newSeq[Item]()
   items.add(Item("first"))
   items.add(Item("second"))     # items owns the data, no cycles
@@ -565,7 +565,7 @@ traverse(root)
 printTree(root)
 # <- pool goes out of scope, all memory freed
 
-@buildGraph func(@pool Pool) -> Node:
+@buildGraph func(@pool Pool) ok Node:
   @a = pool.alloc(Node("A"))
   @b = pool.alloc(Node("B"))
   @c = pool.alloc(Node("C"))
@@ -592,7 +592,7 @@ processUsers(users)
 processRoles(roles)
 
 # Multiple pools passed to one function
-@mergeGraphs func(@src Pool, @dst Pool) -> Node:
+@mergeGraphs func(@src Pool, @dst Pool) ok Node:
   @srcRoot = buildGraph(src)
   @dstRoot = buildGraph(dst)
   # srcRoot and dstRoot cannot link to each other (cross-pool forbidden)
@@ -627,7 +627,7 @@ dynamic.add(4)
 @empty mut = Seq[int]()
 
 # Slice — accepts both array and Seq
-@sum func(@arr slice[int]) -> int:
+@sum func(@arr slice[int]) ok int:
   result = 0
   for @x in arr:
     result = result + x
@@ -697,7 +697,7 @@ Named and unnamed tuples for lightweight data grouping:
 @Point (@x int, @y int)
 
 # Return multiple values without defining a separate type
-@divide+ func(@a int, @b int) -> (@quotient int, @remainder int):
+@divide! func(@a int, @b int) ok (@quotient int, @remainder int):
   result = (quotient=a / b, remainder=a % b)
 
 @r = divide(10, 3)
@@ -705,14 +705,14 @@ Named and unnamed tuples for lightweight data grouping:
 *echo(r.remainder)           # 1
 
 # or
-@divide+ func[
+@divide! func[
   (@a int, @b int),
   (int, int)
 ]:
   result = (a / b, a % b)
 
 
-@divide+ func[
+@divide! func[
   (
     @a int,
     @b int,
@@ -759,7 +759,7 @@ n = n - 5                # OK, n = 5
 n = n - 10               # ERROR: natural cannot be negative
 
 # Ideal for indices, sizes, counters
-@createBuffer+ func(@size natural) -> Buffer:
+@createBuffer! func(@size natural) ok Buffer:
   # size is guaranteed >= 0, no validation needed
   ...
 ```
@@ -784,7 +784,7 @@ case a:
 @y = b else: 0           # 0 (no value — fallback)
 
 # ? — propagate none (like ? for errors)
-@findUser+ func(@id int) -> Option[User]:
+@findUser! func(@id int) ok Option[User]:
   @row = db.find(id)?   # if db.find returns none → function returns none
   result = some(User.from(row))
 
@@ -859,19 +859,19 @@ the data it points to. No dangling pointers, no use-after-free:
 
 ```
 # OK — literal lives forever ('static)
-@greet func() -> str:
+@greet func() ok str:
   return "hello"
 
 # OK — result lifetime tied to parameter (rule 2)
-@first_word func(@s str) -> str:
+@first_word func(@s str) ok str:
   return s.split(" ")[0]
 
 # OK — both params, result tied to both (rule 3)
-@longest func(@x str, @y str) -> str:
+@longest func(@x str, @y str) ok str:
   result = if x.len > y.len: x else: y
 
 # COMPILE ERROR — local String dies, str would dangle
-@bad func() -> str:
+@bad func() ok str:
   @s String = "hello"
   return s              # error: str borrows from s, which is dropped here
 ```
@@ -926,7 +926,7 @@ Compiler determines the kind based on whether variants carry data.
 Supports iteration, `ord`, sets:
 
 ```
-@Direction+ enum:
+@Direction! enum:
   @north, @south, @east, @west
 
 @d = Direction.north
@@ -943,11 +943,11 @@ if Direction.north in dirs:
   *echo("going north")
 
 # Explicit numeric values
-@Color+ enum:
+@Color! enum:
   @red = 0, @green = 1, @blue = 2
 
 # String values — $ returns the string value instead of variant name
-@HttpMethod+ enum:
+@HttpMethod! enum:
   @get = "GET"
   @post = "POST"
   @put = "PUT"
@@ -956,7 +956,7 @@ if Direction.north in dirs:
 *echo(HttpMethod.get)            # 0 (int)
 *echo($HttpMethod.get)           # "GET" ($ returns string value)
 
-@LogLevel+ enum:
+@LogLevel! enum:
   @debug = "DEBUG"
   @info = "INFO"
   @warn = "WARNING"
@@ -974,10 +974,10 @@ Enum for the tag, object with `case` for the data.
 Two definitions — explicit and clear:
 
 ```
-@ShapeKind+ enum:
+@ShapeKind! enum:
   @circle, @rect, @point
 
-@Shape+ object:
+@Shape! object:
   case @kind ShapeKind:
     of circle:
       @radius float
@@ -987,7 +987,7 @@ Two definitions — explicit and clear:
     of point:
       discard
 
-@area+ func(@s Shape) -> float:
+@area! func(@s Shape) ok float:
   result = case s.kind:
     of circle: PI * s.radius * s.radius
     of rect: s.w * s.h
@@ -1003,7 +1003,7 @@ Exhaustive by default. Compiler checks all cases are handled.
 Inside `case`, use **member name only** — no full path needed:
 
 ```
-@Color+ enum:
+@Color! enum:
   @red, @green, @blue
 
 @c = Color.red
@@ -1038,11 +1038,11 @@ case c:
 `case/of` works on union types. All types must be covered:
 
 ```
-# Response from fetch is: Data | !ServerError | !NetworkError
+# Response from fetch is: Data else ServerError else NetworkError
 
 @resp = fetch("http://api.com")
 case resp:
-  of Ok:
+  of ok:
     @data = resp.get()
     *echo(data)
   of ServerError:
@@ -1055,7 +1055,7 @@ Partial match with `else`:
 
 ```
 case resp:
-  of Ok:
+  of ok:
     @data = resp.get()
   else:
     *echo("some error occurred")
@@ -1076,15 +1076,15 @@ No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 ```
 @Printable concept:
-  @toString func(@self) -> str
+  @toString func(@self) ok str
 
 @Comparable concept:
-  @lessThan func(@self, @other Self) -> bool
-  @equals func(@self, @other Self) -> bool
+  @lessThan func(@self, @other Self) ok bool
+  @equals func(@self, @other Self) ok bool
 
 @Serializable concept:
-  @toJson func(@self) -> str
-  @fromJson func(@raw str) -> Self
+  @toJson func(@self) ok str
+  @fromJson func(@raw str) ok Self
 ```
 
 Usage is **optional**, for documentation and better compiler errors:
@@ -1094,7 +1094,7 @@ Usage is **optional**, for documentation and better compiler errors:
 @sort func[T: Comparable](@list mut slice[T]):
   ...
 # error: type Socket does not satisfy concept Comparable
-#   missing: @lessThan func(@self, @other Socket) -> bool
+#   missing: @lessThan func(@self, @other Socket) ok bool
 
 # Without concept — also works, duck typing at call site:
 @sort func[T](@list mut slice[T]):
@@ -1110,7 +1110,7 @@ A type automatically satisfies a concept if it has the required methods:
   @name str
   @age int
 
-@toString func(@self User) -> str:
+@toString func(@self User) ok str:
   result = "{self.name}, {self.age}"
 
 # User automatically satisfies Printable — has toString
@@ -1120,7 +1120,7 @@ A type automatically satisfies a concept if it has the required methods:
 ### Generics
 
 ```
-@map func[T, U](@list slice[T], @f func(T) -> U) -> Seq[U]:
+@map func[T, U](@list slice[T], @f func(T) ok U) ok Seq[U]:
   result = [f(x) for x in list]
 
 # With concept constraint (optional):
@@ -1141,7 +1141,7 @@ Called with `*` prefix. Hygienic by default.
 - Called with `*` prefix: `*myMacro(args)` — always clear it's a macro
 - Hygienic by default — variables inside macro don't leak into caller's scope
 - Debuggable: `iris expand` shows macro output
-- Visibility via `+` (like everything else)
+- Visibility via `!` (like everything else)
 - Can generate types, functions, entire modules
 
 ### Two kinds of parameters
@@ -1210,7 +1210,7 @@ Iterating over AST objects uses normal `for` — no `^^ ` needed.
 ```
 @getter macro(@field, @typ):
   ast.quote:
-    @get_^field.name^+ func(@self ^ast.nameOf(typ)^) -> ^field.type^:
+    @get_^field.name^+ func(@self ^ast.nameOf(typ)^) ok ^field.type^:
       result = self.^field.name^
 ```
 
@@ -1244,7 +1244,7 @@ Works with both regular objects and object variants:
     @fields = ast.fieldsOf(body)
 
     ast.quote:
-      @eq+ func(@a ^name^, @b ^name^) -> bool:
+      @eq! func(@a ^name^, @b ^name^) ok bool:
         result = true
         for @f in fields:
           if a.^f.name^ != b.^f.name^:
@@ -1252,7 +1252,7 @@ Works with both regular objects and object variants:
             return
 
 *derive("Eq"):
-  @Point+ object:
+  @Point! object:
     @x int
     @y int
 ```
@@ -1504,12 +1504,12 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-@fetch func(@url str) -> bytes | !NetError:
+@fetch func(@url str) ok bytes else NetError:
   @resp = http.get(url)?
   result = resp.body()
 
 # Calling — just a call, no await:
-@process func() -> void | !NetError:
+@process func() ok void else NetError:
   @data = fetch("https://api.example.com")?
   *echo(data.get())
 ```
@@ -1538,7 +1538,7 @@ No runtime needed — just C code with pthreads under the hood.
 ## Error Handling
 
 Return type is the success type, errors marked with `!`:
-`-> T | !Error1 | !Error2`. All possible errors must be listed.
+`ok T else Error1 else Error2`. All possible errors must be listed.
 Compiler checks every `raise` matches the declared errors.
 No automatic unwrapping — always use `.get()` to extract Ok value.
 
@@ -1547,14 +1547,14 @@ No automatic unwrapping — always use `.get()` to extract Ok value.
 Error types are regular objects:
 
 ```
-@DivError+ object:
+@DivError! object:
   @message str
 
-@IoError+ object:
+@IoError! object:
   @path str
   @message str
 
-@ParseError+ object:
+@ParseError! object:
   @line int
   @message str
 ```
@@ -1566,12 +1566,12 @@ Error types are regular objects:
 `raise Error(...)` — returns the error.
 
 ```
-@divide+ func(@a int, @b int) -> int | !DivError:
+@divide! func(@a int, @b int) ok int else DivError:
   if b == 0:
     raise DivError(message="division by zero")
   result = a / b          # compiler wraps in Ok
 
-@readConfig+ func(@path str) -> Config | !IoError | !ParseError:
+@readConfig! func(@path str) ok Config else IoError, ParseError:
   @raw = fs.read(path)?              # ? propagates IoError up
   @parsed = json.parse(raw)?         # ? propagates ParseError up
   result = Config.from(parsed)       # compiler wraps in Ok
@@ -1592,7 +1592,7 @@ Three levels — from shortest to most detailed:
 Caller must include compatible error types in its own signature:
 
 ```
-@loadApp+ func() -> App | !IoError | !ParseError:
+@loadApp! func() ok App else IoError, ParseError:
   @cfg = readConfig("app.toml")?     # IoError | ParseError propagated
   result = newApp(cfg.get())
 ```
@@ -1626,7 +1626,7 @@ do @conn = connect("localhost", 8080) else: quit()
 ```
 @response = fetch("http://api.com/data")
 case response:
-  of Ok:
+  of ok:
     @data = response.get()
     *echo(data)
   of ServerError:
@@ -1687,7 +1687,7 @@ Minimal compiler that can compile basic Iris programs to C.
 - [ ] Custom types with `@` attributes
 - [ ] Enum (simple + with data)
 - [ ] Option[T]: some, none
-- [ ] Result unions: `T | !E`
+- [ ] Result unions: `T else E`
 - [ ] case/of with exhaustiveness checking
 - [ ] Tuples (named + unnamed, destructuring)
 - [ ] Generics (duck typing at instantiation)
@@ -1719,7 +1719,7 @@ Minimal compiler that can compile basic Iris programs to C.
 
 ### Phase 6 — Error Handling
 
-- [ ] `T | !E` syntax everywhere (signatures, params, aliases)
+- [ ] `T else E` syntax everywhere (signatures, params, aliases)
 - [ ] `?` operator (propagation + unwrap)
 - [ ] `else:` (fallback + unwrap)
 - [ ] `raise` (explicit error return)

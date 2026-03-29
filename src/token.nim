@@ -26,7 +26,7 @@ type
     tkWhen, tkIsMain
     tkCase, tkOf, tkDiscard
     tkNot, tkAnd, tkOr
-    tkSome, tkNone
+    tkSome, tkNone, tkOk
     tkRaise, tkQuit, tkOwn
     tkTemplate, tkMacro, tkAfter
     tkShl, tkShr, tkXor
@@ -123,7 +123,7 @@ let keywords* = {
   "when": tkWhen, "isMain": tkIsMain,
   "case": tkCase, "of": tkOf, "discard": tkDiscard,
   "not": tkNot, "and": tkAnd, "or": tkOr,
-  "some": tkSome, "none": tkNone,
+  "some": tkSome, "none": tkNone, "ok": tkOk,
   "raise": tkRaise, "quit": tkQuit, "own": tkOwn,
   "template": tkTemplate, "macro": tkMacro, "after": tkAfter,
   "shl": tkShl, "shr": tkShr, "xor": tkXor,
