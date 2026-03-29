@@ -26,10 +26,10 @@ Top-level code executes directly, no `main` required:
 
 ```
 # hello.is — just runs
-echo("hello world")
+*echo("hello world")
 
 @x = 42
-echo(x)
+*echo(x)
 ```
 
 For libraries — `when isMain:` to run code only when file is executed directly
@@ -41,8 +41,8 @@ For libraries — `when isMain:` to run code only when file is executed directly
   result = x + 1
 
 when isMain:
-  echo("testing myLib")
-  echo(helper(5))
+  *echo("testing myLib")
+  *echo(helper(5))
 ```
 
 ## Loops
@@ -61,10 +61,10 @@ for @item in collection:
   process(item)
 
 for @i in 0..10:
-  echo(i)             # 0, 1, 2, ..., 10 (inclusive)
+  *echo(i)             # 0, 1, 2, ..., 10 (inclusive)
 
 for @i in 0..<10:
-  echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
+  *echo(i)             # 0, 1, 2, ..., 9 (exclusive end)
 
 # Named loops via @name — for break/continue targeting a specific loop
 @outer while true:
@@ -143,7 +143,7 @@ if isReady:            # OK
 # Option — true if some:
 @a = some(42)
 if a:
-  echo(a.get())        # .get() to extract value
+  *echo(a.get())        # .get() to extract value
 
 # Result union — true if ok:
 @cfg = readConfig("app.toml")
@@ -210,7 +210,7 @@ This allows using reserved words as field/variant names.
 Construction and access:
 ```
 @u = User(name="Alice", age=30)
-echo(u.name)           # read field
+*echo(u.name)           # read field
 ```
 
 Functions:
@@ -460,7 +460,7 @@ The borrow checker ensures:
   @a = "hello"
   @b = "world"
   @long = longest(a, b)    # compiler knows: a, b, long same scope
-  echo(long)                # OK
+  *echo(long)                # OK
 # <- a, b, long destroyed
 ```
 
@@ -569,12 +569,12 @@ printTree(root)
   result = a
 
 @traverse func(@node Node):
-  echo(node.name)
+  *echo(node.name)
   for child in node.children:
     traverse(child)
 
 @printTree func(@node Node):
-  echo("Tree root: {node.name}")
+  *echo("Tree root: {node.name}")
 
 # Two independent graphs — two separate pools
 @userPool = newPool()
@@ -642,7 +642,7 @@ Inline hash table literal with `{key: value}`:
 @scores: HashTable[string, int] = {"alice": 100, "bob": 85}
 
 # Access:
-echo(headers["Content-Type"])
+*echo(headers["Content-Type"])
 
 # Empty:
 @empty = HashTable[string, int]()
@@ -660,7 +660,7 @@ Inline hash set literal with `{values}`:
 # names of HashSet[string]
 
 if 2 in ids:
-  echo("found")
+  *echo("found")
 
 # Empty:
 @empty = HashSet[int]()
@@ -675,12 +675,12 @@ Named and unnamed tuples for lightweight data grouping:
 ```
 # Named tuple
 @point = (x=10, y=20)
-echo(point.x)              # 10
-echo(point.y)              # 20
+*echo(point.x)              # 10
+*echo(point.y)              # 20
 
 # Unnamed tuple
 @pair = (10, 20)
-echo(pair.0)                # 10
+*echo(pair.0)                # 10
 
 # Tuple type
 @Point tuple:
@@ -695,8 +695,8 @@ echo(pair.0)                # 10
   result = (quotient=a / b, remainder=a % b)
 
 @r = divide(10, 3)
-echo(r.quotient)            # 3
-echo(r.remainder)           # 1
+*echo(r.quotient)            # 3
+*echo(r.remainder)           # 1
 
 # or
 @divide+ func[
@@ -721,7 +721,7 @@ echo(r.remainder)           # 1
 
 # Destructuring
 (@q, @rem) = divide(10, 3)
-echo(q)                      # 3
+*echo(q)                      # 3
 ```
 
 ## Numeric Types
@@ -748,12 +748,12 @@ natural     # int restricted to >= 0, error on attempt to go negative
 it does not wrap around on overflow — it raises an error:
 
 ```
-var n: natural = 10
+@n mut natural = 10
 n = n - 5                # OK, n = 5
 n = n - 10               # ERROR: natural cannot be negative
 
 # Ideal for indices, sizes, counters
-fn createBuffer*(size: natural) -> Buffer:
+@createBuffer+ func(@size natural) -> Buffer:
   # size is guaranteed >= 0, no validation needed
   ...
 ```
@@ -765,25 +765,25 @@ Works with `?`, `case`, and `else` — same patterns as error handling.
 
 ```
 # Creating
-let a = some(42)            # Option[int] with value
-let b = none(int)           # Option[int] without value
+@a = some(42)            # Option[int] with value
+@b = none(int)           # Option[int] without value
 
 # Pattern matching
 case a:
-  of some: echo(a.get())           # 42
-  of none: echo("nothing")
+  of some: *echo(a.get())           # 42
+  of none: *echo("nothing")
 
 # else — default value
-let x = a else: 0           # 42 (has value)
-let y = b else: 0           # 0 (no value — fallback)
+@x = a else: 0           # 42 (has value)
+@y = b else: 0           # 0 (no value — fallback)
 
 # ? — propagate none (like ? for errors)
-fn findUser*(id: int) -> Option[User]:
-  let row = db.find(id)?   # if db.find returns none → function returns none
+@findUser+ func(@id int) -> Option[User]:
+  @row = db.find(id)?   # if db.find returns none → function returns none
   result = some(User.from(row))
 
 # Chaining with ?
-let name = getUser(1)?.name  # none if user not found
+@name = getUser(1)?.name  # none if user not found
 ```
 
 ## Rune
@@ -791,8 +791,8 @@ let name = getUser(1)?.name  # none if user not found
 `rune` — a single Unicode code point. Literals use single quotes:
 
 ```
-let ch: rune = 'A'
-let emoji: rune = '🎉'
+@ch rune = 'A'
+@emoji rune = '🎉'
 ```
 
 ## Strings
@@ -831,7 +831,7 @@ The compiler allocates only what is needed when the value is known.
 @greeting str = "Hello, {name}!"     # stack, compiler computes size
 
 @greet func(@s str):                  # passed by reference (auto), 8 bytes
-  echo(s)
+  *echo(s)
 
 # For large/dynamic text — use String (heap)
 @buf mut String = String.new()
@@ -871,43 +871,43 @@ Compiler determines the kind based on whether variants carry data.
 Supports iteration, `ord`, sets:
 
 ```
-enum Direction*:
+@Direction+ enum:
   @north, @south, @east, @west
 
-let d = Direction.north
-echo(d)                         # 0 (enum is always int)
-echo($d)                        # "north" ($ returns variant name)
+@d = Direction.north
+*echo(d)                         # 0 (enum is always int)
+*echo($d)                        # "north" ($ returns variant name)
 
 # Iterate over all values
-for dir in Direction:
-  echo($dir)
+for @dir in Direction:
+  *echo($dir)
 
 # Sets
-let dirs: set[Direction] = {Direction.north, Direction.south}
+@dirs set[Direction] = {Direction.north, Direction.south}
 if Direction.north in dirs:
-  echo("going north")
+  *echo("going north")
 
 # Explicit numeric values
-enum Color*:
+@Color+ enum:
   @red = 0, @green = 1, @blue = 2
 
 # String values — $ returns the string value instead of variant name
-enum HttpMethod*:
+@HttpMethod+ enum:
   @get = "GET"
   @post = "POST"
   @put = "PUT"
   @delete = "DELETE"
 
-echo(HttpMethod.get)            # 0 (int)
-echo($HttpMethod.get)           # "GET" ($ returns string value)
+*echo(HttpMethod.get)            # 0 (int)
+*echo($HttpMethod.get)           # "GET" ($ returns string value)
 
-enum LogLevel*:
+@LogLevel+ enum:
   @debug = "DEBUG"
   @info = "INFO"
   @warn = "WARNING"
   @error = "ERROR"
 
-echo($LogLevel.warn)            # "WARNING"
+*echo($LogLevel.warn)            # "WARNING"
 ```
 
 `$` operator: returns the string value if defined, otherwise the variant name.
@@ -916,12 +916,12 @@ Enum value without `$` is always `int`.
 #### Enum with data (algebraic type / sum type)
 
 ```
-enum Shape*:
-  @Circle(radius: float)
-  @Rect(w: float, h: float)
+@Shape+ enum:
+  @Circle(@radius float)
+  @Rect(@w float, @h float)
   @Point                        # variant without data — also OK
 
-fn area*(s: Shape) -> float:
+@area+ func(@s Shape) -> float:
   result = case s:
     of Circle: PI * s.radius * s.radius
     of Rect: s.w * s.h
@@ -944,18 +944,18 @@ Inside `case`, use **member name only** — no full path needed:
 
 case c:
   of red:
-    echo("red!")
+    *echo("red!")
   of green:
-    echo("green!")
+    *echo("green!")
   of blue:
-    echo("blue!")
+    *echo("blue!")
 ```
 
 Partial match with `else`:
 
 ```
 case c:
-  of red: echo("red!")
+  of red: *echo("red!")
   else: discard            # covers green, blue
 ```
 
@@ -963,7 +963,7 @@ Without `else` and without all members → **compile error**:
 
 ```
 case c:
-  of red: echo("red!")
+  of red: *echo("red!")
   # ERROR: non-exhaustive — green, blue not handled
 ```
 
@@ -978,11 +978,11 @@ case c:
 case resp:
   of Ok:
     @data = resp.get()
-    echo(data)
+    *echo(data)
   of ServerError:
-    echo("server error")
+    *echo("server error")
   of NetworkError:
-    echo("network error")
+    *echo("network error")
 ```
 
 Partial match with `else`:
@@ -992,7 +992,7 @@ case resp:
   of Ok:
     @data = resp.get()
   else:
-    echo("some error occurred")
+    *echo("some error occurred")
 ```
 
 #### Rules
@@ -1009,29 +1009,29 @@ Named set of requirements for a type. Purely compile-time, zero overhead.
 No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 ```
-concept Printable:
-  fn toString(self) -> str
+@Printable concept:
+  @toString func(@self) -> str
 
-concept Comparable:
-  fn lessThan(self, other: Self) -> bool
-  fn equals(self, other: Self) -> bool
+@Comparable concept:
+  @lessThan func(@self, @other Self) -> bool
+  @equals func(@self, @other Self) -> bool
 
-concept Serializable:
-  fn toJson(self) -> str
-  fn fromJson(raw: str) -> Self
+@Serializable concept:
+  @toJson func(@self) -> str
+  @fromJson func(@raw str) -> Self
 ```
 
 Usage is **optional**, for documentation and better compiler errors:
 
 ```
 # With concept — better error messages:
-fn sort[T: Comparable](var list: slice[T]):
+@sort func[T: Comparable](@list mut slice[T]):
   ...
 # error: type Socket does not satisfy concept Comparable
-#   missing: fn lessThan(self, other: Socket) -> bool
+#   missing: @lessThan func(@self, @other Socket) -> bool
 
 # Without concept — also works, duck typing at call site:
-fn sort[T](var list: slice[T]):
+@sort func[T](@list mut slice[T]):
   ...
 # error: type Socket has no method 'lessThan'
 #   called from sort() at main.is:10
@@ -1040,11 +1040,11 @@ fn sort[T](var list: slice[T]):
 A type automatically satisfies a concept if it has the required methods:
 
 ```
-type User:
-  @name: str
-  @age: int
+@User object:
+  @name str
+  @age int
 
-fn toString(self: User) -> str:
+@toString func(@self User) -> str:
   result = "{self.name}, {self.age}"
 
 # User automatically satisfies Printable — has toString
@@ -1054,13 +1054,13 @@ fn toString(self: User) -> str:
 ### Generics
 
 ```
-fn map[T, U](list: slice[T], f: func(T) -> U) -> Seq[U]:
+@map func[T, U](@list slice[T], @f func(T) -> U) -> Seq[U]:
   result = [f(x) for x in list]
 
 # With concept constraint (optional):
-fn printAll[T: Printable](items: slice[T]):
-  for item in items:
-    echo(item.toString())
+@printAll func[T: Printable](@items slice[T]):
+  for @item in items:
+    *echo(item.toString())
 ```
 
 ## Metaprogramming
@@ -1086,22 +1086,22 @@ Called with `*` prefix. Hygienic by default.
 ```
 # Simple macro — typed params, value substitution
 @log macro(@msg str):
-  echo("[LOG] ", msg)
+  *echo("[LOG] ", msg)
 
 *log("server started")
-# → echo("[LOG] ", "server started")
+# → *echo("[LOG] ", "server started")
 
 # Code macro — untyped param, AST expansion
 @benchmark macro(@label str, @body):
   @start = clock()
   ast.expand(body)
-  echo(label, ": ", clock() - start)
+  *echo(label, ": ", clock() - start)
 
 *benchmark("sort"):
   sort(data)
 # → @start = clock()
 #   sort(data)
-#   echo("sort", ": ", clock() - start)
+#   *echo("sort", ": ", clock() - start)
 ```
 
 ### Hygiene
@@ -1116,7 +1116,7 @@ Variables declared inside a macro are invisible to the caller:
 
 @temp = 100
 *swap(x, y)
-echo(temp)         # 100 — not affected by macro's @temp
+*echo(temp)         # 100 — not affected by macro's @temp
 ```
 
 To explicitly export a variable into caller's scope — use `ast.export`:
@@ -1130,7 +1130,7 @@ To explicitly export a variable into caller's scope — use `ast.export`:
 
 *withTimer:
   heavyWork()
-echo(elapsed)      # available because of ast.export
+*echo(elapsed)      # available because of ast.export
 ```
 
 ### ast.quote — code generation with `^expr^`
@@ -1228,7 +1228,7 @@ Behavior is determined by contents, not by different keywords.
     for item2 in list2:
       if item == item2:
         break `search         # exit both loops
-  echo("not found")
+  *echo("not found")
 
 # Nested named blocks
 *block `outer:
@@ -1251,7 +1251,7 @@ Behavior is determined by contents, not by different keywords.
   result = users.len
 
 # Or simpler:
-let status = block `b:
+@status = block `b:
   result = if isReady: "ok" else: "waiting"
 ```
 
@@ -1261,30 +1261,30 @@ Data races are impossible — prevented at compile time by the borrow checker.
 If data is passed to a `spawn`, no other spawn can access it mutably.
 
 ```
-var data = ~[1, 2, 3]
+@data mut = ~[1, 2, 3]
 
 # COMPILE ERROR — two spawns cannot mutate the same data:
-block `b:
+block:
   spawn:
     data.add(4)          # ERROR: mutable borrow conflict
   spawn:
     data.add(5)          # ERROR: data already borrowed
 
 # OK — communicate via channels instead of shared memory:
-let ch = channel[int](2)
-block `b:
+@ch = channel[int](2)
+block:
   spawn:
     ch.send(4)
   spawn:
     ch.send(5)
 
 # OK — each spawn gets its own data:
-block `b:
+block:
   spawn:
-    var local = ~[1, 2]
+    @local mut = ~[1, 2]
     local.add(3)
   spawn:
-    var local = ~[4, 5]
+    @local mut = ~[4, 5]
     local.add(6)
 ```
 
@@ -1297,49 +1297,49 @@ block `b:
 ### Structured Concurrency
 
 ```
-block `workers:
+@workers block:
   spawn: fetch("url1")
   spawn: fetch("url2")
 # <- all tasks guaranteed to be complete
 
 # spawn is available via block handle
-block `pipeline:
-  let ch = channel[string](10)
+@pipeline block:
+  @ch = channel[str](10)
 
-  for url in urls `urls:
+  @urls_loop for @url in urls:
     spawn:
-      let data = fetch(url) else:
-        break `urls
+      do @data = fetch(url) else:
+        break urls_loop
       ch.send(data)
 
-  for _ in urls:
-    block `recv:
+  for @_ in urls:
+    @recv block:
       spawn:
-        let val = ch.receive()
+        @val = ch.receive()
         if val:
           process(val.get())
-          break `recv
+          break recv
       spawn:
         after(10.sec)
-        break `pipeline       # timeout — exit everything
+        break pipeline       # timeout — exit everything
 ```
 
 ### Nested blocks for pipeline
 
 ```
-block `pipeline:
-  let raw = channel[bytes](100)
-  let parsed = channel[Record](100)
+@pipeline block:
+  @raw = channel[bytes](100)
+  @parsed = channel[Record](100)
 
-  block `producers:
-    for url in urls:
+  @producers block:
+    for @url in urls:
       spawn:
         raw.send(fetch(url))
 
-  block `consumers:
-    for _ in urls:
+  @consumers block:
+    for @_ in urls:
       spawn:
-        let data = raw.recv()
+        @data = raw.recv()
         parsed.send(parse(data))
   # producers done -> consumers done -> pipeline done
 ```
@@ -1350,7 +1350,7 @@ block `pipeline:
 
 ```
 # For daemons/servers — explicit unstructured spawn (rare)
-let server = detach:
+@server = detach:
   listen(8080)
 # execution continues, server runs in background
 server.cancel()       # explicit stop
@@ -1366,23 +1366,23 @@ No unbounded channels — always explicit size to prevent memory leaks.
 
 ```
 # Buffered — blocks send when full:
-let ch = channel[int](10)
+@ch = channel[int](10)
 
 # Unbuffered — blocks send until someone calls receive:
-let ch = channel[int](0)
+@ch = channel[int](0)
 
 # Explicit receive:
-let val = ch.receive()      # blocks until value available
+@val = ch.receive()      # blocks until value available
 
 # Ownership transfer — sender loses access:
-let ch = channel[Seq[int]](1)
-var data = ~[1, 2, 3]
+@ch = channel[Seq[int]](1)
+@data mut = ~[1, 2, 3]
 ch.send(data)           # data MOVED into channel
-# echo(data)            # ERROR: data was moved
+# *echo(data)            # ERROR: data was moved
 
 # To send and keep — explicit clone:
 ch.send(data.clone())   # send a copy
-echo(data)              # OK — original still available
+*echo(data)              # OK — original still available
 ```
 
 ### Concurrency patterns via block
@@ -1398,21 +1398,21 @@ block:
 # <- all three complete
 
 # First to complete wins (like doOne/select) — break on success:
-block `race:
+@race block:
   spawn:
-    let val = ch1.receive()
+    @val = ch1.receive()
     if val:
       process(val.get())
-      break `race
+      break race
   spawn:
-    let val = ch2.receive()
+    @val = ch2.receive()
     if val:
       process(val.get())
-      break `race
+      break race
   spawn:
     after(5.sec)
-    echo("Timeout!")
-    break `race
+    *echo("Timeout!")
+    break race
 ```
 
 ### No Colored Functions (no async/await)
@@ -1425,27 +1425,27 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-fn fetch(url: str) -> bytes | !NetError:
-  let resp = http.get(url)?
-  result = resp.body()
+@fetch func(@url str) -> Ok[bytes]:
+  @resp = http.get(url)?
+  result = Ok(resp.body())
 
 # Calling — just a call, no await:
-fn process() !NetError:
-  let data = fetch("https://api.example.com")?
-  echo(data)
+@process func() -> Ok[void]:
+  @data = fetch("https://api.example.com")?
+  *echo(data)
 ```
 
 Concurrency is achieved via `block spawn`, not async/await:
 
 ```
 # Sequential — regular call:
-let a = fetch("url1")?
-let b = fetch("url2")?
+@a = fetch("url1")?
+@b = fetch("url2")?
 
 # Parallel — block spawn:
-var a: bytes
-var b: bytes
-block `w:
+@a mut bytes
+@b mut bytes
+@w block:
   spawn: a = fetch("url1")?
   spawn: b = fetch("url2")?
 # <- both complete, a and b available
@@ -1498,13 +1498,13 @@ No automatic unwrap — always use `.get()` explicitly.
 ```
 # Handle error
 do @conn = connect("localhost", 8080) else:
-  echo(conn)              # conn is the error value itself
+  *echo(conn)              # conn is the error value itself
   quit()
 @c = conn.get()           # explicit unwrap — always required
 
 # Log and continue
 do @cfg = readConfig("app.toml") else:
-  echo("Config failed: ", cfg)
+  *echo("Config failed: ", cfg)
 
 # Fallback value
 do @cfg = readConfig("app.toml") else:
@@ -1521,11 +1521,11 @@ do @conn = connect("localhost", 8080) else: quit()
 case response:
   of Ok:
     @data = response.get()
-    echo(data)
+    *echo(data)
   of ServerError:
-    echo("server error")
+    *echo("server error")
   of NetworkError:
-    echo("network error")
+    *echo("network error")
   else:
     db.close()
 ```
