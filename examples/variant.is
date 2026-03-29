@@ -16,8 +16,14 @@
     of point:
       discard
 
-# Test: common fields + variant field
+# Test: common fields + variant field access inside case
 @s = Shape(x=10, y=20, kind=ShapeKind.circle, radius=3.14)
 *echo(s.x)
 *echo(s.y)
-*echo(s.kind)
+case s.kind:
+  of circle:
+    *echo(s.radius)
+  of rect:
+    *echo(s.w)
+  else:
+    discard

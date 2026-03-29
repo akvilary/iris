@@ -88,7 +88,7 @@ proc formatParams(g: CodeGen, params: seq[Param]): string =
 
 proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   if e of StringLitExpr or e of StringInterpExpr: return ("%s", false)
-  if e of FloatLitExpr: return ("%f", false)
+  if e of FloatLitExpr: return ("%g", false)
   if e of BoolLitExpr: return ("%s", false)
   if e of DollarExpr: return ("%s", false)
   if e of IdentExpr:
@@ -96,8 +96,21 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
     case ct
     of "const char*", "iris_str", "iris_String": return ("%s", false)
     of "bool": return ("%s", false)
-    of "double", "float": return ("%f", false)
+    of "double", "float": return ("%g", false)
     else: return ("%lld", true)
+  if e of FieldAccessExpr:
+    let fa = FieldAccessExpr(e)
+    if fa.expr of IdentExpr:
+      let objName = IdentExpr(fa.expr).name
+      let objType = g.varCType(objName)
+      if objType.len > 0 and objType in g.typeFields:
+        for f in g.typeFields[objType]:
+          if f.name == fa.field:
+            case f.ctype
+            of "double", "float": return ("%g", false)
+            of "const char*", "iris_str", "iris_String": return ("%s", false)
+            of "bool": return ("%s", false)
+            else: return ("%lld", true)
   return ("%lld", true)
 
 proc inferCType(g: CodeGen, e: Expr): string =
@@ -118,10 +131,15 @@ proc inferCType(g: CodeGen, e: Expr): string =
       if name in g.typeFields: return name
       return g.varTypes.getOrDefault(name, "int64_t")
   if e of FieldAccessExpr:
-    let f = FieldAccessExpr(e)
-    if f.expr of IdentExpr:
-      let name = IdentExpr(f.expr).name
+    let fa = FieldAccessExpr(e)
+    if fa.expr of IdentExpr:
+      let name = IdentExpr(fa.expr).name
       if name in g.enumNames: return name
+      let objType = g.varCType(name)
+      if objType.len > 0 and objType in g.typeFields:
+        for f in g.typeFields[objType]:
+          if f.name == fa.field:
+            return f.ctype
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   return "int64_t"
