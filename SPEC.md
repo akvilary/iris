@@ -411,8 +411,8 @@ lives on the stack — only the buffer is in heap. This is explicit:
 @arr array[int, 100] = [0; 100]      # 800 bytes stack
 
 # Heap — explicit, you chose a heap type
-@buf mut String = String.new()        # buffer in heap
-@list mut Seq[int] = Seq[int].new()   # buffer in heap
+@buf mut String = String()        # buffer in heap
+@list mut Seq[int] = Seq[int]()   # buffer in heap
 @map mut HashTable[str, int] = {}     # buffer in heap
 
 # Heap via Pool — explicit arena allocation
@@ -889,7 +889,7 @@ greet(name)                           # str → str, direct
 greet(buf)                            # String → str, auto-convert (zero-cost)
 
 # For large/dynamic text — use String (heap)
-@buf mut String = String.new()
+@buf mut String = String()
 buf.append("part1")
 buf.append("part2")
 @view str = buf                       # view into buf's heap data
