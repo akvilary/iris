@@ -1,1 +1,4 @@
-/target
+# Nim build artifacts
+src/irisc
+nimcache/
+src/nimcache/
