@@ -389,10 +389,10 @@ No `ref object` — only `object`. Like Rust, not like Go or Java.
 | `bool` | Stack | 1 byte | Primitive |
 | `rune` | Stack | 4 bytes | Unicode code point |
 | `natural` | Stack | 8 bytes | Non-negative integer |
-| `str` | Stack | Max 256 bytes | Immutable, compiler optimizes known sizes |
+| `str` | Stack | 16 bytes | Immutable view (pointer + length), like `&str` in Rust |
 | `array[T, N]` | Stack | `N * sizeof(T)` | Fixed size, known at compile time |
 | Custom objects | Stack | Sum of fields | `@User object:` → stack |
-| `String` | **Heap** | Unlimited | Mutable, growable. Metadata (ptr+len+cap) on stack |
+| `String` | **Heap** | Unlimited | Owned heap buffer (ptr+len+cap=24 bytes on stack) |
 | `Seq[T]` | **Heap** | Unlimited | Like Rust's `Vec<T>`. Metadata on stack |
 | `HashTable[K,V]` | **Heap** | Unlimited | Like Rust's `HashMap`. Metadata on stack |
 | `HashSet[T]` | **Heap** | Unlimited | Like Rust's `HashSet`. Metadata on stack |
@@ -406,7 +406,7 @@ lives on the stack — only the buffer is in heap. This is explicit:
 ```
 # Stack — all data on stack, no heap allocation
 @x int = 42                           # 8 bytes stack
-@name str = "Alice"                   # 6 bytes stack (optimized)
+@name str = "Alice"                   # 16 bytes stack (pointer + length)
 @point = Point(x=10, y=20)           # sizeof(Point) stack
 @arr array[int, 100] = [0; 100]      # 800 bytes stack
 

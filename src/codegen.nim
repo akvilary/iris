@@ -102,7 +102,8 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   if e of IdentExpr:
     let ct = g.varCType(IdentExpr(e).name)
     case ct
-    of "const char*", "iris_str", "iris_String": return ("%s", false)
+    of "const char*": return ("%s", false)
+    of "iris_str", "iris_String": return ("%.*s", false)
     of "bool": return ("%s", false)
     of "double", "float": return ("%g", false)
     else: return ("%lld", true)
@@ -116,7 +117,8 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
           if f.name == fa.field:
             case f.ctype
             of "double", "float": return ("%g", false)
-            of "const char*", "iris_str", "iris_String": return ("%s", false)
+            of "const char*": return ("%s", false)
+            of "iris_str", "iris_String": return ("%.*s", false)
             of "bool": return ("%s", false)
             else: return ("%lld", true)
   return ("%lld", true)
@@ -174,7 +176,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     let ct = g.varCType(name)
     if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-    elif ct == "iris_str": g.emit(name & ".data")
+    elif ct == "iris_str": g.emit("(int)" & name & ".len, " & name & ".data")
     else: g.genExpr(e)
   elif e of DollarExpr:
     let inner = DollarExpr(e).expr
@@ -182,7 +184,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
       let name = IdentExpr(inner).name
       let ct = g.varCType(name)
       if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-      elif ct == "iris_str": g.emit(name & ".data")
+      elif ct == "iris_str": g.emit("(int)" & name & ".len, " & name & ".data")
       elif ct == "const char*": g.emit(name)
       else:
         for en in g.enumNames:
@@ -808,17 +810,13 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("#include <stdbool.h>\n")
   g.emit("#include <string.h>\n")
   g.emit("#include <stdlib.h>\n\n")
-  g.emit("// iris str — stack-allocated, immutable, max 256 bytes\n")
-  g.emit("typedef struct { uint8_t len; char data[255]; } iris_str;\n")
+  g.emit("// str — immutable view (pointer + length), like Rust's &str\n")
+  g.emit("typedef struct { const char* data; size_t len; } iris_str;\n")
   g.emit("static inline iris_str iris_str_from(const char* s) {\n")
-  g.emit("  iris_str r = {0};\n")
-  g.emit("  r.len = (uint8_t)strlen(s);\n")
-  g.emit("  if (r.len > 254) r.len = 254;\n")
-  g.emit("  memcpy(r.data, s, r.len);\n")
-  g.emit("  r.data[r.len] = '\\0';\n")
-  g.emit("  return r;\n")
+  g.emit("  return (iris_str){s, strlen(s)};\n")
   g.emit("}\n\n")
-  g.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n")
+  g.emit("// String — owned heap buffer (pointer + length + capacity), like Rust's String\n")
+  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_String;\n\n")
 
   # Common Option types
   g.emit("// Option types\n")
