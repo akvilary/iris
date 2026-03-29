@@ -1,0 +1,5 @@
+# Multiple imports from same path
+import utils/[calc, text]
+
+@x = calc.double(21)
+*echo(x)

@@ -1,0 +1,2 @@
+@triple! func(@x int) ok int:
+  result = x * 3

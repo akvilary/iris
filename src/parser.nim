@@ -689,7 +689,24 @@ proc parseStmt*(P: var Parser): Stmt =
   of tkCase: P.parseCase()
   of tkImport:
     discard P.advance()
-    ImportStmt(module: P.parseIdentName())
+    let baseName = P.parseIdentName()
+    if P.at(tkSlash):
+      # import std/[a, b] or import std/module
+      discard P.advance()
+      if P.at(tkLBracket):
+        # import std/[a, b, c]
+        discard P.advance()
+        var modules: seq[string]
+        while not P.at(tkRBracket) and not P.at(tkEof):
+          modules.add(baseName & "/" & P.parseIdentName())
+          if P.at(tkComma): discard P.advance()
+        P.expect(tkRBracket)
+        ImportListStmt(modules: modules)
+      else:
+        # import std/module
+        ImportStmt(module: baseName & "/" & P.parseIdentName())
+    else:
+      ImportStmt(module: baseName)
   of tkFrom:
     discard P.advance()
     let module = P.parseIdentName()

@@ -1,0 +1,8 @@
+# Two separate multi-imports
+import utils/[calc, text]
+import other/[helpers]
+
+@x = calc.double(10)
+@y = helpers.triple(10)
+*echo(x)
+*echo(y)

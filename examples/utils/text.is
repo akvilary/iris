@@ -1,0 +1,2 @@
+@greet! func(@name str) ok str:
+  result = name

@@ -17,22 +17,26 @@ type
     stmts: seq[Stmt]
     fromNames: seq[string]  # empty = full import, non-empty = from import
 
+proc resolveModule(result: var Table[string, ImportInfo], modName: string,
+                   fromNames: seq[string], baseDir: string) =
+  if modName in result: return
+  # Module path: "mymath" → "mymath.is", "std/io" → "std/io.is"
+  let modPath = baseDir / modName & ".is"
+  if not fileExists(modPath):
+    raise newException(ValueError, "error: module '" & modName & "' not found (" & modPath & ")")
+  let modSource = readFile(modPath)
+  result[modName] = ImportInfo(stmts: compileToAst(modSource), fromNames: fromNames)
+
 proc resolveImports(stmts: seq[Stmt], baseDir: string): Table[string, ImportInfo] =
   ## Find import statements, load and parse imported modules
   for s in stmts:
-    var modName = ""
-    var fromNames: seq[string]
     if s of ImportStmt:
-      modName = ImportStmt(s).module
+      result.resolveModule(ImportStmt(s).module, @[], baseDir)
+    elif s of ImportListStmt:
+      for m in ImportListStmt(s).modules:
+        result.resolveModule(m, @[], baseDir)
     elif s of FromImportStmt:
-      modName = FromImportStmt(s).module
-      fromNames = FromImportStmt(s).names
-    if modName.len > 0 and modName notin result:
-      let modPath = baseDir / modName & ".is"
-      if not fileExists(modPath):
-        raise newException(ValueError, "error: module '" & modName & "' not found (" & modPath & ")")
-      let modSource = readFile(modPath)
-      result[modName] = ImportInfo(stmts: compileToAst(modSource), fromNames: fromNames)
+      result.resolveModule(FromImportStmt(s).module, FromImportStmt(s).names, baseDir)
 
 proc compileToC(source: string, baseDir: string): string =
   let stmts = compileToAst(source)
@@ -47,8 +51,14 @@ proc compileToC(source: string, baseDir: string): string =
   # Multi-module: register imports and collect public names
   for modName, info in modules:
     let isFromImport = info.fromNames.len > 0
+    let prefix = sanitizeModName(modName)
+    # Short name for qualified access: utils/calc → calc
+    let shortName = modName.split("/")[^1]
+
     if not isFromImport:
-      gen.importedModules.add(modName)  # qualified: mymath.add()
+      gen.importedModules.add(shortName)
+      # Map short name to sanitized prefix for C name generation
+      gen.nameAliases["__mod_" & shortName] = prefix
 
     # Collect public names for access checking
     var pubNames: seq[string]
@@ -61,7 +71,7 @@ proc compileToC(source: string, baseDir: string): string =
         pubNames.add(EnumDeclStmt(s).name)
       if s of DeclStmt and DeclStmt(s).public:
         pubNames.add(DeclStmt(s).name)
-    gen.modulePublicNames[modName] = pubNames
+    gen.modulePublicNames[shortName] = pubNames
 
     # For from imports: check names exist and are public, register aliases
     if isFromImport:
@@ -69,7 +79,7 @@ proc compileToC(source: string, baseDir: string): string =
         if name notin pubNames:
           raise newException(ValueError,
             "error: '" & name & "' is not public in module '" & modName & "'")
-        gen.nameAliases[name] = modName & "_" & name
+        gen.nameAliases[name] = prefix & "_" & name
 
   gen.emitPreamble()
 
@@ -80,11 +90,12 @@ proc compileToC(source: string, baseDir: string): string =
       if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
         gen.genStmt(s); gen.emit("\n")
     # Extern declarations for public functions
+    let prefix = sanitizeModName(modName)
     for s in info.stmts:
       if s of FnDeclStmt:
         let f = FnDeclStmt(s)
         if not f.public: continue
-        let cname = modName & "_" & f.name
+        let cname = prefix & "_" & f.name
         let ret = if f.returnType != nil: gen.typeToCStr(f.returnType) else: "void"
         gen.emit("extern " & ret & " " & cname & "(" & gen.formatParams(f.params) & ");\n")
         gen.fnReturnTypes[cname] = ret
@@ -94,7 +105,7 @@ proc compileToC(source: string, baseDir: string): string =
   # Filter out import statements
   var mainStmts: seq[Stmt]
   for s in stmts:
-    if not (s of ImportStmt) and not (s of FromImportStmt):
+    if not (s of ImportStmt) and not (s of ImportListStmt) and not (s of FromImportStmt):
       mainStmts.add(s)
 
   # Types from main

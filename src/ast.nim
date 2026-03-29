@@ -253,6 +253,9 @@ type
   ImportStmt* = ref object of Stmt
     module*: string
 
+  ImportListStmt* = ref object of Stmt
+    modules*: seq[string]  # import std/[a, b] → ["std/a", "std/b"]
+
   FromImportStmt* = ref object of Stmt
     module*: string
     names*: seq[string]

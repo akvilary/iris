@@ -317,13 +317,14 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let f = FieldAccessExpr(e)
     if f.expr of IdentExpr:
       let name = IdentExpr(f.expr).name
-      # Module access: math.add → math_add
+      # Module access: calc.double → utils_calc_double
       if name in g.importedModules:
         if name in g.modulePublicNames:
           if f.field notin g.modulePublicNames[name]:
             raise newException(ValueError,
               "error: '" & f.field & "' is not public in module '" & name & "'")
-        g.emit(name & "_" & f.field); return
+        let prefix = g.nameAliases.getOrDefault("__mod_" & name, name)
+        g.emit(prefix & "_" & f.field); return
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
       # Check variant field access
@@ -747,10 +748,14 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("}\n\n")
   g.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n")
 
+proc sanitizeModName*(name: string): string =
+  ## Convert module path to valid C identifier: utils/calc → utils_calc
+  result = name.replace("/", "_").replace("\\", "_")
+
 proc cName(g: CodeGen, name: string, public: bool): string =
   ## Prefix name with module name for public symbols
   if g.moduleName.len > 0:
-    g.moduleName & "_" & name
+    sanitizeModName(g.moduleName) & "_" & name
   else:
     name
 
@@ -813,6 +818,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
 proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string =
   ## Generate C file for a module (no main, prefix public names)
   g.moduleName = modName
+  let prefix = sanitizeModName(modName)
   g.emitPreamble()
 
   # Types
@@ -824,8 +830,8 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
   for s in stmts:
     if s of FnDeclStmt:
       let f = FnDeclStmt(s)
-      if not f.public: continue  # only export public functions
-      let cname = modName & "_" & f.name
+      if not f.public: continue
+      let cname = prefix & "_" & f.name
       let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
       g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ");\n")
       g.fnReturnTypes[cname] = ret
@@ -837,7 +843,7 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
       let f = FnDeclStmt(s)
       let hasReturn = f.returnType != nil
       let ret = if hasReturn: g.typeToCStr(f.returnType) else: "void"
-      let cname = if f.public: modName & "_" & f.name else: f.name
+      let cname = if f.public: prefix & "_" & f.name else: f.name
       if not f.public: g.emit("static ")
       g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
