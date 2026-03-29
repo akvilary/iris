@@ -308,13 +308,19 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 ### Declaration
 
 ```
-@funcName+ func(@param1 Type1, @param2 Type2) -> Ok[ReturnType]:
+# Pure function (no errors):
+@funcName+ func(@param1 Type1, @param2 Type2) -> ReturnType:
+  ...
+
+# Function with errors — ! marks error types:
+@funcName+ func(@param1 Type1) -> ReturnType | !Error1 | !Error2:
   ...
 ```
 
 - `+` after name = public
-- Functions return `Ok[T]` for success, error types for failure
-- `.get()` to unwrap `Ok[T]` — always explicit, no auto-unwrap
+- `-> T` — pure function, cannot raise
+- `-> T | !E1 | !E2` — can raise E1 or E2, compiler checks
+- `.get()` to unwrap result — always explicit, no auto-unwrap
 - `?` operator for error propagation
 - `raise` to return an error
 
@@ -983,7 +989,7 @@ case c:
 `case/of` works on union types. All types must be covered:
 
 ```
-@Response = Ok[Data] | ServerError | NetworkError
+# Response from fetch is: Data | !ServerError | !NetworkError
 
 @resp = fetch("http://api.com")
 case resp:
@@ -1449,14 +1455,14 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-@fetch func(@url str) -> Ok[bytes]:
+@fetch func(@url str) -> bytes | !NetError:
   @resp = http.get(url)?
-  result = Ok(resp.body())
+  result = resp.body()
 
 # Calling — just a call, no await:
-@process func() -> Ok[void]:
+@process func() -> void | !NetError:
   @data = fetch("https://api.example.com")?
-  *echo(data)
+  *echo(data.get())
 ```
 
 Concurrency is achieved via `block spawn`, not async/await:
@@ -1482,25 +1488,51 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-Functions return `Ok[T]` for success or a specific error type.
-No automatic unwrapping — always use `.get()` to extract the value.
+Return type is the success type, errors marked with `!`:
+`-> T | !Error1 | !Error2`. All possible errors must be listed.
+Compiler checks every `raise` matches the declared errors.
+No automatic unwrapping — always use `.get()` to extract Ok value.
+
+### Declaring errors
+
+Error types are regular objects:
+
+```
+@DivError+ object:
+  @message str
+
+@IoError+ object:
+  @path str
+  @message str
+
+@ParseError+ object:
+  @line int
+  @message str
+```
 
 ### Returning errors (function author)
 
-```
-@readConfig+ func(@path str) -> Ok[Config]:
-  @raw = fs.read(path)?              # ? propagates error up
-  @parsed = json.parse(raw)?         # ? propagates error up
-  result = Ok(Config.from(parsed))
+`!` marks error types in the signature. Inside the body,
+`result = value` — compiler wraps in Ok automatically.
+`raise Error(...)` — returns the error.
 
-@divide+ func(@a int, @b int) -> Ok[int]:
+```
+@divide+ func(@a int, @b int) -> int | !DivError:
   if b == 0:
-    raise MathError.divByZero        # returns error, exits function
-  result = Ok(a / b)
+    raise DivError(message="division by zero")
+  result = a / b          # compiler wraps in Ok
+
+@readConfig+ func(@path str) -> Config | !IoError | !ParseError:
+  @raw = fs.read(path)?              # ? propagates IoError up
+  @parsed = json.parse(raw)?         # ? propagates ParseError up
+  result = Config.from(parsed)       # compiler wraps in Ok
 ```
 
-- `?` — propagates the error to the caller
-- `raise` — explicitly returns an error and exits the function
+Compiler checks:
+- `raise DivError(...)` — `DivError` is in signature → OK
+- `raise SomeOther(...)` — not in signature → **compile error**
+- `?` propagates errors from callee — must be compatible with signature
+- Function without `!` errors → pure, cannot raise
 
 ### Handling errors (caller side)
 
@@ -1508,10 +1540,12 @@ Three levels — from shortest to most detailed:
 
 #### 1. `?` — propagate up
 
+Caller must include compatible error types in its own signature:
+
 ```
-@loadApp+ func() -> Ok[App]:
-  @cfg = readConfig("app.toml")?     # error propagated to caller
-  result = Ok(newApp(cfg.get()))
+@loadApp+ func() -> App | !IoError | !ParseError:
+  @cfg = readConfig("app.toml")?     # IoError | ParseError propagated
+  result = newApp(cfg.get())
 ```
 
 #### 2. `do...else` — handle inline
@@ -1532,7 +1566,7 @@ do @cfg = readConfig("app.toml") else:
 
 # Fallback value
 do @cfg = readConfig("app.toml") else:
-  @cfg = Ok(Config.default())
+  @cfg = Config.default()
 
 # One-liner
 do @conn = connect("localhost", 8080) else: quit()
@@ -1559,7 +1593,7 @@ case response:
 | Syntax | What it does |
 |--------|-------------|
 | `?` | Propagate error to caller |
-| `.get()` | Explicit unwrap of `Ok[T]` — always required |
+| `.get()` | Explicit unwrap of Ok value — always required |
 | `do @x = f() else:` | Check for `Ok`, handle error inline |
 | `case` | Pattern match on `Ok` and specific error types |
 | `raise` | Return an error from function |

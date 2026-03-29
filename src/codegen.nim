@@ -21,6 +21,10 @@ type
     enumNames: seq[string]
     variantInfo: Table[string, VariantInfo]  # type name -> variant info
     activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
+    okTypes: seq[string]  # Ok types already emitted
+    fnReturnTypes: Table[string, string]  # func name -> C return type
+    inResultFunc: bool    # inside a function with error types
+    currentResultName: string  # e.g. "divide_Result"
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -126,9 +130,17 @@ proc inferCType(g: CodeGen, e: Expr): string =
     return g.inferCType(b.left)
   if e of CallExpr:
     let c = CallExpr(e)
+    # .get() → unwrap, return the value type (not Result type)
+    if c.fn of FieldAccessExpr:
+      let fa = FieldAccessExpr(c.fn)
+      if fa.field == "get":
+        let ct = g.inferCType(fa.expr)
+        # For Result types, .get() returns the value type — simplified for now
+        return "int64_t"
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
       if name in g.typeFields: return name
+      if name in g.fnReturnTypes: return g.fnReturnTypes[name]
       return g.varTypes.getOrDefault(name, "int64_t")
   if e of FieldAccessExpr:
     let fa = FieldAccessExpr(e)
@@ -247,6 +259,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.genExpr(u.expr)
   elif e of CallExpr:
     let c = CallExpr(e)
+    # .get() on result → .value
+    if c.fn of FieldAccessExpr:
+      let fa = FieldAccessExpr(c.fn)
+      if fa.field == "get" and c.args.len == 0:
+        g.genExpr(fa.expr); g.emit(".value"); return
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
       if name == "echo":
@@ -370,7 +387,12 @@ proc genStmt(g: var CodeGen, s: Stmt) =
     g.varTypes[d.name] = ctype
     g.emitIndent(); g.emit(ctype & " " & d.name & " = ")
     g.genExpr(d.value); g.emit(";\n")
-    g.emitIndent(); g.emit("if (!" & d.name & ") {\n")
+    # Check if result type has _Ok kind (error-returning function)
+    g.emitIndent()
+    if ctype.endsWith("_Result"):
+      g.emit("if (" & d.name & ".kind != " & ctype & "_Ok) {\n")
+    else:
+      g.emit("if (!" & d.name & ") {\n")
     g.indent += 1
     for st in d.elseBody: g.genStmt(st)
     g.indent -= 1
@@ -381,19 +403,62 @@ proc genStmt(g: var CodeGen, s: Stmt) =
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
 
   elif s of ResultAssignStmt:
-    g.emitIndent(); g.emit("__result = "); g.genExpr(ResultAssignStmt(s).value); g.emit(";\n")
+    g.emitIndent()
+    if g.inResultFunc:
+      g.emit("__result.value = ")
+    else:
+      g.emit("__result = ")
+    g.genExpr(ResultAssignStmt(s).value); g.emit(";\n")
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
-    let ret = g.typeToCStr(f.returnType)
     let hasReturn = f.returnType != nil
-    g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
-    g.indent += 1
-    if hasReturn: g.emitLine(ret & " __result;")
-    for st in f.body: g.genStmt(st)
-    if hasReturn: g.emitLine("return __result;")
-    g.indent -= 1
-    g.emit("}\n")
+    let hasErrors = f.errorTypes.len > 0
+
+    if hasErrors and hasReturn:
+      let valType = g.typeToCStr(f.returnType)
+      let resultName = f.name & "_Result"
+      # Emit result struct if not yet emitted
+      if resultName notin g.okTypes:
+        g.okTypes.add(resultName)
+        g.emit("typedef enum { " & resultName & "_Ok")
+        for et in f.errorTypes:
+          g.emit(", " & resultName & "_" & g.typeToCStr(et))
+        g.emit(" } " & resultName & "_Kind;\n")
+        g.emit("typedef struct {\n")
+        g.indent += 1
+        g.emitLine(resultName & "_Kind kind;")
+        g.emitLine("union {")
+        g.indent += 1
+        g.emitLine(valType & " value;")
+        for et in f.errorTypes:
+          let etype = g.typeToCStr(et)
+          g.emitLine(etype & " " & etype & "_err;")
+        g.indent -= 1
+        g.emitLine("};")
+        g.indent -= 1
+        g.emit("} " & resultName & ";\n")
+      # Function returns Result struct
+      g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
+      g.indent += 1
+      g.emitLine(resultName & " __result;")
+      g.emitLine("__result.kind = " & resultName & "_Ok;")
+      g.inResultFunc = true
+      g.currentResultName = resultName
+      for st in f.body: g.genStmt(st)
+      g.inResultFunc = false
+      g.emitLine("return __result;")
+      g.indent -= 1
+      g.emit("}\n")
+    else:
+      let ret = if hasReturn: g.typeToCStr(f.returnType) else: "void"
+      g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
+      g.indent += 1
+      if hasReturn: g.emitLine(ret & " __result;")
+      for st in f.body: g.genStmt(st)
+      if hasReturn: g.emitLine("return __result;")
+      g.indent -= 1
+      g.emit("}\n")
 
   elif s of IfStmt:
     let ifs = IfStmt(s)
@@ -548,14 +613,15 @@ proc genStmt(g: var CodeGen, s: Stmt) =
 
   elif s of CaseStmt:
     let cs = CaseStmt(s)
-    # Infer enum type and variant context
+    # Infer type context for case expression
     var enumType = ""
-    var variantVar = ""  # variable name for variant field access tracking
+    var variantVar = ""
+    var resultType = ""  # non-empty if case on a Result type
     if cs.expr of IdentExpr:
       let ct = g.varCType(IdentExpr(cs.expr).name)
       if ct in g.enumNames: enumType = ct
+      elif ct.endsWith("_Result"): resultType = ct
     elif cs.expr of FieldAccessExpr:
-      # case s.kind: → track 's' as variant variable
       let fa = FieldAccessExpr(cs.expr)
       if fa.expr of IdentExpr:
         let objName = IdentExpr(fa.expr).name
@@ -565,17 +631,27 @@ proc genStmt(g: var CodeGen, s: Stmt) =
           if fa.field == vi.tagName:
             variantVar = objName
             enumType = vi.tagType
-    g.emitIndent(); g.emit("switch ("); g.genExpr(cs.expr); g.emit(") {\n")
+    g.emitIndent()
+    if resultType.len > 0:
+      g.emit("switch ("); g.genExpr(cs.expr); g.emit(".kind) {\n")
+    else:
+      g.emit("switch ("); g.genExpr(cs.expr); g.emit(") {\n")
     g.indent += 1
     for b in cs.branches:
       case b.pattern.kind
       of patVariant:
-        if enumType.len > 0:
+        if resultType.len > 0:
+          # of DivError: → case resultType_DivError:
+          g.emitLine("case " & resultType & "_" & b.pattern.name & ":")
+        elif enumType.len > 0:
           g.emitLine("case " & enumType & "_" & b.pattern.name & ":")
         else:
           g.emitLine("case " & b.pattern.name & ":")
       of patOk:
-        g.emitLine("/* of Ok — not yet implemented */")
+        if resultType.len > 0:
+          g.emitLine("case " & resultType & "_Ok:")
+        else:
+          g.emitLine("/* of Ok — no result context */")
       of patError:
         g.emitLine("/* of Error — not yet implemented */")
       of patSome:
@@ -612,6 +688,24 @@ proc genStmt(g: var CodeGen, s: Stmt) =
     else:
       g.emit("exit(0);\n")
 
+  elif s of RaiseStmt:
+    let r = RaiseStmt(s)
+    if g.inResultFunc:
+      # raise DivError(...) → set kind and return
+      if r.expr of CallExpr and CallExpr(r.expr).fn of IdentExpr:
+        let errType = IdentExpr(CallExpr(r.expr).fn).name
+        g.emitIndent()
+        g.emit("__result.kind = " & g.currentResultName & "_" & errType & ";\n")
+        g.emitIndent()
+        g.emit("__result." & errType & "_err = ")
+        g.genExpr(r.expr)
+        g.emit(";\n")
+        g.emitLine("return __result;")
+      else:
+        g.emitLine("/* raise: unknown error expression */")
+    else:
+      g.emitLine("/* raise outside error function */")
+
   elif s of DiscardStmt:
     g.emitLine("(void)0;")
 
@@ -640,20 +734,39 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   g.emit("}\n\n")
   g.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n")
 
-  # Forward declarations
-  for s in stmts:
-    if s of FnDeclStmt:
-      let f = FnDeclStmt(s)
-      g.emit(g.typeToCStr(f.returnType) & " " & f.name & "(" &
-             g.formatParams(f.params) & ");\n")
-  g.emit("\n")
-
   # Types first
   for s in stmts:
     if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
       g.genStmt(s); g.emit("\n")
 
-  # Functions second
+  # Result structs + forward declarations
+  for s in stmts:
+    if s of FnDeclStmt:
+      let f = FnDeclStmt(s)
+      if f.errorTypes.len > 0 and f.returnType != nil:
+        # Pre-emit result struct so forward decl can use it
+        let valType = g.typeToCStr(f.returnType)
+        let resultName = f.name & "_Result"
+        if resultName notin g.okTypes:
+          g.okTypes.add(resultName)
+          g.emit("typedef enum { " & resultName & "_Ok")
+          for et in f.errorTypes:
+            g.emit(", " & resultName & "_" & g.typeToCStr(et))
+          g.emit(" } " & resultName & "_Kind;\n")
+          g.emit("typedef struct { " & resultName & "_Kind kind; union { " & valType & " value; ")
+          for et in f.errorTypes:
+            let etype = g.typeToCStr(et)
+            g.emit(etype & " " & etype & "_err; ")
+          g.emit("}; } " & resultName & ";\n")
+        g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
+        g.fnReturnTypes[f.name] = resultName
+      else:
+        let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
+        g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
+        g.fnReturnTypes[f.name] = ret
+  g.emit("\n")
+
+  # Functions
   var topLevel: seq[Stmt]
   for s in stmts:
     if s of FnDeclStmt:

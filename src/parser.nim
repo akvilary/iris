@@ -444,14 +444,20 @@ proc parseDecl(P: var Parser): Stmt =
       if P.at(tkComma): discard P.advance()
     P.expect(tkRParen)
     var returnType: TypeExpr = nil
+    var errorTypes: seq[TypeExpr]
     if P.at(tkArrow):
       discard P.advance()
       returnType = P.parseType()
+      # Parse | !Error1 | !Error2
+      while P.at(tkPipe):
+        discard P.advance()
+        P.expect(tkBang)
+        errorTypes.add(P.parseType())
     P.expect(tkColon)
     P.skipNewlines()
     let body = P.parseBlockBody()
     FnDeclStmt(name: at.name, public: at.public, params: params,
-               returnType: returnType, body: body)
+               returnType: returnType, errorTypes: errorTypes, body: body)
   of tkObject:
     discard P.advance()
     var parent = ""

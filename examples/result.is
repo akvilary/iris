@@ -1,0 +1,23 @@
+# Error handling with Ok / raise
+
+@DivError+ object:
+  @message str
+
+@divide+ func(@a int, @b int) -> int | !DivError:
+  if b == 0:
+    raise DivError(message="division by zero")
+  result = a / b
+
+# do...else
+do @r = divide(10, 3) else:
+  *echo("error")
+  quit()
+*echo(r.get())
+
+# case
+@r2 = divide(10, 0)
+case r2:
+  of Ok:
+    *echo(r2.get())
+  of DivError:
+    *echo("caught error")

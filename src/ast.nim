@@ -165,6 +165,7 @@ type
     public*: bool
     params*: seq[Param]
     returnType*: TypeExpr  # nil = void
+    errorTypes*: seq[TypeExpr]  # !Error1, !Error2
     body*: seq[Stmt]
 
   IfStmt* = ref object of Stmt
