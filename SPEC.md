@@ -12,7 +12,7 @@ with Rust-level memory safety. "Safe Nim."
 
 ## Syntax
 
-- Indentation-based blocks (like Nim/Python)
+- Indentation-based blocks
 - 2 spaces per indent level (enforced by `iris fmt`)
 - No semicolons
 - No curly braces for blocks
@@ -913,19 +913,30 @@ if Direction.north in dirs:
 `$` operator: returns the string value if defined, otherwise the variant name.
 Enum value without `$` is always `int`.
 
-#### Enum with data (algebraic type / sum type)
+#### Object variants (tagged union)
+
+Enum for the tag, object with `case` for the data.
+Two definitions — explicit and clear:
 
 ```
-@Shape+ enum:
-  @Circle(@radius float)
-  @Rect(@w float, @h float)
-  @Point                        # variant without data — also OK
+@ShapeKind+ enum:
+  @circle, @rect, @point
+
+@Shape+ object:
+  case @kind ShapeKind:
+    of circle:
+      @radius float
+    of rect:
+      @w float
+      @h float
+    of point:
+      discard
 
 @area+ func(@s Shape) -> float:
-  result = case s:
-    of Circle: PI * s.radius * s.radius
-    of Rect: s.w * s.h
-    of Point: 0.0
+  result = case s.kind:
+    of circle: PI * s.radius * s.radius
+    of rect: s.w * s.h
+    of point: 0.0
 ```
 
 ### case/of — pattern matching
@@ -1136,13 +1147,16 @@ To explicitly export a variable into caller's scope — use `ast.export`:
 ### ast.quote — code generation with `^expr^`
 
 `ast.quote` creates AST from a code template. `^expr^` inserts
-(unquotes) a value into the template:
+(unquotes) a value as a **name** into the generated code.
+
+Rule: `^expr^` only when substituting a **name** (type name, field name).
+Iterating over AST objects uses normal `for` — no `^^ ` needed.
 
 ```
 @getter macro(@field, @typ):
   ast.quote:
-    @get_^field^+ func(@self ^typ^) -> ^typeOf(field)^:
-      result = self.^field^
+    @get_^field.name^+ func(@self ^ast.nameOf(typ)^) -> ^field.type^:
+      result = self.^field.name^
 ```
 
 ### AST manipulation
@@ -1152,25 +1166,35 @@ To explicitly export a variable into caller's scope — use `ast.export`:
 | Function | What it does |
 |----------|-------------|
 | `ast.expand(code)` | Insert code parameter into output |
+| `ast.export @name Type` | Export variable into caller's scope |
 | `ast.quote:` | Create AST from code template |
-| `ast.fieldsOf(type)` | List of fields of an object |
+| `ast.fieldsOf(type)` | All fields (common + variant), each has `.name`, `.type` |
 | `ast.nameOf(node)` | Name of a node |
 | `ast.typeOf(node)` | Type of a node |
 | `ast.emit(node)` | Insert programmatically built AST |
 
+`ast.fieldsOf` returns all fields including variant fields.
+Compiler ensures safe access to variant fields at compile time.
+
 ### Full example — derive
+
+Works with both regular objects and object variants:
 
 ```
 @derive macro(@trait str, @body):
   ast.expand(body)
+
   if trait == "Eq":
+    @name = ast.nameOf(body)
     @fields = ast.fieldsOf(body)
+
     ast.quote:
-      @eq+ func(@a ^ast.nameOf(body)^, @b ^ast.nameOf(body)^) -> bool:
+      @eq+ func(@a ^name^, @b ^name^) -> bool:
         result = true
-        for @f in ^fields^:
-          if a.^f^ != b.^f^:
+        for @f in fields:
+          if a.^f.name^ != b.^f.name^:
             result = false
+            return
 
 *derive("Eq"):
   @Point+ object:

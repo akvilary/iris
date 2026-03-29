@@ -1,0 +1,23 @@
+# Object variants (tagged union)
+
+@ShapeKind+ enum:
+  @circle, @rect, @point
+
+# Object with common fields + variant
+@Shape+ object:
+  @x int
+  @y int
+  case @kind ShapeKind:
+    of circle:
+      @radius float
+    of rect:
+      @w float
+      @h float
+    of point:
+      discard
+
+# Test: common fields + variant field
+@s = Shape(x=10, y=20, kind=ShapeKind.circle, radius=3.14)
+*echo(s.x)
+*echo(s.y)
+*echo(s.kind)

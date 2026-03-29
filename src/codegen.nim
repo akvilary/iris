@@ -4,16 +4,29 @@ import std/[strutils, tables, sequtils]
 import ast
 
 type
+  VariantFieldInfo* = object
+    fieldName*: string
+    branchValues*: seq[string]  # which enum values allow this field
+
+  VariantInfo* = object
+    tagName*: string            # "kind"
+    tagType*: string            # "ShapeKind"
+    fields*: seq[VariantFieldInfo]
+
   CodeGen* = object
     output: string
     indent: int
     varTypes: Table[string, string]
     typeFields: Table[string, seq[tuple[name, ctype: string]]]
     enumNames: seq[string]
+    variantInfo: Table[string, VariantInfo]  # type name -> variant info
+    activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
-          typeFields: initTable[string, seq[tuple[name, ctype: string]]]())
+          typeFields: initTable[string, seq[tuple[name, ctype: string]]](),
+          variantInfo: initTable[string, VariantInfo](),
+          activeCaseBranch: initTable[string, seq[string]]())
 
 # ── Emit helpers ──
 
@@ -223,6 +236,26 @@ proc genExpr(g: var CodeGen, e: Expr) =
       # Struct constructor
       if name in g.typeFields:
         let fields = g.typeFields[name]
+        # Check variant field validity
+        if name in g.variantInfo:
+          let vi = g.variantInfo[name]
+          # Find which variant is active from kind= arg
+          var activeVariant = ""
+          for arg in c.args:
+            if arg.name == vi.tagName:
+              # Extract enum value: ShapeKind.circle → circle
+              if arg.value of FieldAccessExpr:
+                activeVariant = FieldAccessExpr(arg.value).field
+          # Check each named arg against variant
+          if activeVariant.len > 0:
+            for arg in c.args:
+              if arg.name.len > 0 and arg.name != vi.tagName:
+                for vf in vi.fields:
+                  if vf.fieldName == arg.name:
+                    if activeVariant notin vf.branchValues:
+                      raise newException(ValueError,
+                        "error: field '" & arg.name & "' is not accessible for variant '" &
+                        activeVariant & "' (belongs to: " & vf.branchValues.join(", ") & ")")
         g.emit("(" & name & "){")
         for i, arg in c.args:
           if i > 0: g.emit(", ")
@@ -243,6 +276,26 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let name = IdentExpr(f.expr).name
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
+      # Check variant field access
+      let varType = g.varCType(name)
+      if varType.len > 0 and varType in g.variantInfo:
+        let vi = g.variantInfo[varType]
+        for vf in vi.fields:
+          if vf.fieldName == f.field:
+            # This is a variant field — check if we're in a matching case branch
+            if name in g.activeCaseBranch:
+              let allowed = g.activeCaseBranch[name]
+              var ok = false
+              for v in vf.branchValues:
+                if v in allowed: ok = true
+              if not ok:
+                raise newException(ValueError,
+                  "error: field '" & f.field & "' is not accessible here (requires variant: " &
+                  vf.branchValues.join(", ") & ")")
+            else:
+              raise newException(ValueError,
+                "error: field '" & f.field & "' is a variant field — access only inside 'case " &
+                name & "." & vi.tagName & ":'")
     g.genExpr(f.expr); g.emit("."); g.emit(f.field)
   elif e of IndexExpr:
     let idx = IndexExpr(e)
@@ -393,18 +446,53 @@ proc genStmt(g: var CodeGen, s: Stmt) =
       allFields = g.typeFields[o.parent]
     g.emit("typedef struct {\n")
     g.indent += 1
+    # Parent fields
     for f in allFields: g.emitLine(f.ctype & " " & f.name & ";")
+    # Own fields
     for f in o.fields:
       let ct = g.typeToCStr(f.typeAnn)
       g.emitLine(ct & " " & f.name & ";")
       allFields.add((f.name, ct))
+    # Object variant (tagged union)
+    if o.variant.tagName.len > 0:
+      g.emitLine(o.variant.tagType & " " & o.variant.tagName & ";")
+      allFields.add((o.variant.tagName, o.variant.tagType))
+      g.emitLine("union {")
+      g.indent += 1
+      for b in o.variant.branches:
+        if b.fields.len == 1:
+          # Single field — flat in union
+          let f = b.fields[0]
+          let ct = g.typeToCStr(f.typeAnn)
+          g.emitLine(ct & " " & f.name & ";")
+          allFields.add((f.name, ct))
+        elif b.fields.len > 1:
+          # Multiple fields — anonymous struct in union
+          g.emitLine("struct {")
+          g.indent += 1
+          for f in b.fields:
+            let ct = g.typeToCStr(f.typeAnn)
+            g.emitLine(ct & " " & f.name & ";")
+            allFields.add((f.name, ct))
+          g.indent -= 1
+          g.emitLine("};")
+      g.indent -= 1
+      g.emitLine("};")  # anonymous union
     g.indent -= 1
     g.emit("} " & o.name & ";\n")
     g.typeFields[o.name] = allFields
+    # Store variant info for compile-time checks
+    if o.variant.tagName.len > 0:
+      var vi = VariantInfo(tagName: o.variant.tagName, tagType: o.variant.tagType)
+      for b in o.variant.branches:
+        for f in b.fields:
+          vi.fields.add(VariantFieldInfo(fieldName: f.name, branchValues: b.values))
+      g.variantInfo[o.name] = vi
 
   elif s of EnumDeclStmt:
     let en = EnumDeclStmt(s)
     g.enumNames.add(en.name)
+    # Simple enum — no data variants (tagged unions are via object variants)
     g.emit("typedef enum {\n")
     g.indent += 1
     for i, v in en.variants:
@@ -414,6 +502,7 @@ proc genStmt(g: var CodeGen, s: Stmt) =
       g.emit("\n")
     g.indent -= 1
     g.emit("} " & en.name & ";\n")
+
     # toString for string-valued enums
     let hasStrings = en.variants.anyIt(it.valueKind == evString)
     if hasStrings:
@@ -441,11 +530,23 @@ proc genStmt(g: var CodeGen, s: Stmt) =
 
   elif s of CaseStmt:
     let cs = CaseStmt(s)
-    # Infer enum type from expression for short variant names
+    # Infer enum type and variant context
     var enumType = ""
+    var variantVar = ""  # variable name for variant field access tracking
     if cs.expr of IdentExpr:
       let ct = g.varCType(IdentExpr(cs.expr).name)
       if ct in g.enumNames: enumType = ct
+    elif cs.expr of FieldAccessExpr:
+      # case s.kind: → track 's' as variant variable
+      let fa = FieldAccessExpr(cs.expr)
+      if fa.expr of IdentExpr:
+        let objName = IdentExpr(fa.expr).name
+        let objType = g.varCType(objName)
+        if objType.len > 0 and objType in g.variantInfo:
+          let vi = g.variantInfo[objType]
+          if fa.field == vi.tagName:
+            variantVar = objName
+            enumType = vi.tagType
     g.emitIndent(); g.emit("switch ("); g.genExpr(cs.expr); g.emit(") {\n")
     g.indent += 1
     for b in cs.branches:
@@ -464,7 +565,13 @@ proc genStmt(g: var CodeGen, s: Stmt) =
       of patNone:
         g.emitLine("/* of none — not yet implemented */")
       g.indent += 1
+      # Set active variant for field access checks inside this branch
+      if variantVar.len > 0 and b.pattern.kind == patVariant:
+        g.activeCaseBranch[variantVar] = @[b.pattern.name]
       for st in b.body: g.genStmt(st)
+      # Clear active variant after branch
+      if variantVar.len > 0:
+        g.activeCaseBranch.del(variantVar)
       g.emitLine("break;")
       g.indent -= 1
     if cs.elseBranch.len > 0:

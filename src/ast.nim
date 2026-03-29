@@ -203,11 +203,21 @@ type
     public*: bool
     typeAnn*: TypeExpr
 
+  VariantBranch* = object
+    values*: seq[string]     # enum member names (of circle, rect, ...)
+    fields*: seq[TypeField]  # fields for this variant
+
+  ObjectVariant* = object
+    tagName*: string         # @kind
+    tagType*: string         # ShapeKind
+    branches*: seq[VariantBranch]
+
   ObjectDeclStmt* = ref object of Stmt
     name*: string
     public*: bool
     parent*: string
     fields*: seq[TypeField]
+    variant*: ObjectVariant  # empty tagName = no variant
 
   EnumVariant* = object
     name*: string
