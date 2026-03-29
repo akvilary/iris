@@ -252,6 +252,13 @@ import net
 
 # NOT allowed:
 # connect("localhost", 8080)   <- compile error
+
+# Multiple imports from same path:
+import std/[strutils, sequtils, tables]
+
+# Multiple separate imports:
+import net
+import json
 ```
 
 ### From import — explicit import of specific names
@@ -301,12 +308,13 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 ### Declaration
 
 ```
-@funcName+ func(@param1 Type1, @param2 Type2) -> Result:
+@funcName+ func(@param1 Type1, @param2 Type2) -> Ok[ReturnType]:
   ...
 ```
 
 - `+` after name = public
-- All functions implicitly return Result (see Error Handling)
+- Functions return `Ok[T]` for success, error types for failure
+- `.get()` to unwrap `Ok[T]` — always explicit, no auto-unwrap
 - `?` operator for error propagation
 - `raise` to return an error
 
@@ -920,21 +928,80 @@ fn area*(s: Shape) -> float:
     of Point: 0.0
 ```
 
-Pattern matching with exhaustiveness checking — compiler guarantees
-all variants are handled. Use `else` to catch remaining cases,
-`discard` to explicitly ignore:
+### case/of — pattern matching
+
+Exhaustive by default. Compiler checks all cases are handled.
+
+#### Enums — short member names
+
+Inside `case`, use **member name only** — no full path needed:
 
 ```
-case direction:
-  of Direction.north:
-    goUp()
-  of Direction.south:
-    goDown()
-else: discard                        # explicitly ignore east, west
+@Color+ enum:
+  @red, @green, @blue
+
+@c = Color.red
+
+case c:
+  of red:
+    echo("red!")
+  of green:
+    echo("green!")
+  of blue:
+    echo("blue!")
 ```
 
-No `_:` wildcard — use `else:` instead. `case` must always be exhaustive
-(all cases handled or `else` present).
+Partial match with `else`:
+
+```
+case c:
+  of red: echo("red!")
+  else: discard            # covers green, blue
+```
+
+Without `else` and without all members → **compile error**:
+
+```
+case c:
+  of red: echo("red!")
+  # ERROR: non-exhaustive — green, blue not handled
+```
+
+#### Union types — match on type
+
+`case/of` works on union types. All types must be covered:
+
+```
+@Response = Ok[Data] | ServerError | NetworkError
+
+@resp = fetch("http://api.com")
+case resp:
+  of Ok:
+    @data = resp.get()
+    echo(data)
+  of ServerError:
+    echo("server error")
+  of NetworkError:
+    echo("network error")
+```
+
+Partial match with `else`:
+
+```
+case resp:
+  of Ok:
+    @data = resp.get()
+  else:
+    echo("some error occurred")
+```
+
+#### Rules
+
+- `case` must always be exhaustive (all cases or `else`)
+- No `_:` wildcard — use `else:` instead
+- `discard` to explicitly ignore: `else: discard`
+- Enum members use short names (not `Color.red`, just `red`)
+- Union types match on type name
 
 ### Concepts
 
@@ -998,85 +1065,147 @@ fn printAll[T: Printable](items: slice[T]):
 
 ## Metaprogramming
 
-Macros are a core feature of Iris. Written in Iris itself,
-they operate on AST at compile-time. Three levels from simple to powerful.
+One mechanism: `macro`. No separate `template` (unlike Nim).
+Called with `*` prefix. Hygienic by default.
 
 ### Principles
 
 - Written in Iris itself (not a separate language)
-- Operate on **untyped AST** (before type checking) — avoids phase ordering problems
-- Hygienic (no accidental name collisions)
-- Debuggable (`iris expand` shows macro output)
-- Applied by calling the macro directly (like Nim), no special decorator syntax
-- Visibility via `*` (like everything else in Iris)
+- One mechanism `macro` — no template/macro split
+- Called with `*` prefix: `*myMacro(args)` — always clear it's a macro
+- Hygienic by default — variables inside macro don't leak into caller's scope
+- Debuggable: `iris expand` shows macro output
+- Visibility via `+` (like everything else)
 - Can generate types, functions, entire modules
 
-### Templates — inline substitution
+### Two kinds of parameters
 
-Simple compile-time code substitution, zero overhead:
-
-```
-template notEqual(a, b) -> bool:
-  not (a == b)
-
-# Usage — expanded at compile-time:
-if notEqual(x, y):
-  echo("different")
-
-# Expands to:
-# if not (x == y):
-#     echo("different")
-```
-
-### Macros — AST transformation
-
-Receive AST, return modified AST:
+- **Typed** (`@param Type`) — evaluated, passed as value
+- **Untyped** (`@param`) — passed as code (AST), expanded with `ast.expand()`
 
 ```
-macro serializable*(body: Ast) -> Ast:
-  # adds toJson() and fromJson() methods to a type
-  let typeName = body.name
-  body.addFn:
-    fn toJson*(self) -> str:
-      @buf mut = String.new()
-      buf.add("{")
-      for i, field in body.fields:
-        if i > 0: buf.add(", ")
-        buf.add("\"{field.name}\": {self.{field.name}}")
-      buf.add("}")
-      result = buf.toString()
-  result = body
+# Simple macro — typed params, value substitution
+@log macro(@msg str):
+  echo("[LOG] ", msg)
 
-# Usage — macro is just called, block is its AST argument:
-serializable:
-  type User:
-    @name*: str
-    @age*: int
+*log("server started")
+# → echo("[LOG] ", "server started")
 
-# Compiler expands to:
-# type User:
-#     @name*: str
-#     @age*: int
-# fn toJson*(self: User) -> str:
-#     ...
+# Code macro — untyped param, AST expansion
+@benchmark macro(@label str, @body):
+  @start = clock()
+  ast.expand(body)
+  echo(label, ": ", clock() - start)
+
+*benchmark("sort"):
+  sort(data)
+# → @start = clock()
+#   sort(data)
+#   echo("sort", ": ", clock() - start)
+```
+
+### Hygiene
+
+Variables declared inside a macro are invisible to the caller:
+
+```
+@swap macro(@a, @b):
+  @temp = a
+  a = b
+  b = temp
+
+@temp = 100
+*swap(x, y)
+echo(temp)         # 100 — not affected by macro's @temp
+```
+
+To explicitly export a variable into caller's scope — use `ast.export`:
+
+```
+@withTimer macro(@body):
+  ast.export @elapsed int
+  @start = clock()
+  ast.expand(body)
+  elapsed = clock() - start
+
+*withTimer:
+  heavyWork()
+echo(elapsed)      # available because of ast.export
+```
+
+### ast.quote — code generation with `^expr^`
+
+`ast.quote` creates AST from a code template. `^expr^` inserts
+(unquotes) a value into the template:
+
+```
+@getter macro(@field, @typ):
+  ast.quote:
+    @get_^field^+ func(@self ^typ^) -> ^typeOf(field)^:
+      result = self.^field^
+```
+
+### AST manipulation
+
+`ast` module for programmatic code inspection and generation:
+
+| Function | What it does |
+|----------|-------------|
+| `ast.expand(code)` | Insert code parameter into output |
+| `ast.quote:` | Create AST from code template |
+| `ast.fieldsOf(type)` | List of fields of an object |
+| `ast.nameOf(node)` | Name of a node |
+| `ast.typeOf(node)` | Type of a node |
+| `ast.emit(node)` | Insert programmatically built AST |
+
+### Full example — derive
+
+```
+@derive macro(@trait str, @body):
+  ast.expand(body)
+  if trait == "Eq":
+    @fields = ast.fieldsOf(body)
+    ast.quote:
+      @eq+ func(@a ^ast.nameOf(body)^, @b ^ast.nameOf(body)^) -> bool:
+        result = true
+        for @f in ^fields^:
+          if a.^f^ != b.^f^:
+            result = false
+
+*derive("Eq"):
+  @Point+ object:
+    @x int
+    @y int
 ```
 
 ### DSL — domain-specific languages
 
-Macros can parse custom syntax and generate code:
-
 ```
-macro html(body: Ast) -> Ast:
-  # parse DSL and generate Element constructors
+@html macro(@body):
+  # parse body AST and generate Element constructors
   ...
 
-let page = html:
-  div(class: "container"):
+@page = *html:
+  div(class="container"):
     h1: "Hello"
     p: "World"
-
-# Expands to Element constructor calls
 ```
+
+### Bitwise operations
+
+Bitwise ops use words (like Nim), freeing `^` for macros:
+
+| Operation | Syntax | Example |
+|-----------|--------|---------|
+| Shift left | `shl` | `value shl 8` |
+| Shift right | `shr` | `value shr 4` |
+| Bitwise XOR | `xor` | `a xor b` |
+| Bitwise AND | `and` | `data and 0xFF` (int context) |
+| Bitwise OR | `or` | `READ or WRITE` (int context) |
+| Bitwise NOT | `not` | `not mask` (int context) |
+
+`and`/`or`/`not` work for both logical (bool) and bitwise (int) —
+compiler distinguishes by type.
 
 ### Tooling
 
@@ -1329,25 +1458,21 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-**All functions implicitly return Result.** Even pure computations like
-`add(1, 2)` return Result — the compiler optimizes away the wrapper
-when a function never errors.
-
-No `Result[T, E]` or `| !ErrorType` in signatures. The return type
-is the success type; errors are always possible.
+Functions return `Ok[T]` for success or a specific error type.
+No automatic unwrapping — always use `.get()` to extract the value.
 
 ### Returning errors (function author)
 
 ```
-@readConfig+ func(@path str) -> Config:
+@readConfig+ func(@path str) -> Ok[Config]:
   @raw = fs.read(path)?              # ? propagates error up
   @parsed = json.parse(raw)?         # ? propagates error up
-  result = Config.from(parsed)
+  result = Ok(Config.from(parsed))
 
-@divide+ func(@a int, @b int) -> int:
+@divide+ func(@a int, @b int) -> Ok[int]:
   if b == 0:
-    raise MathError.divByZero        # explicit error return
-  result = a / b
+    raise MathError.divByZero        # returns error, exits function
+  result = Ok(a / b)
 ```
 
 - `?` — propagates the error to the caller
@@ -1360,29 +1485,30 @@ Three levels — from shortest to most detailed:
 #### 1. `?` — propagate up
 
 ```
-@loadApp+ func() -> App:
+@loadApp+ func() -> Ok[App]:
   @cfg = readConfig("app.toml")?     # error propagated to caller
-  result = newApp(cfg)
+  result = Ok(newApp(cfg.get()))
 ```
 
 #### 2. `do...else` — handle inline
 
-`do` executes and checks the Result. If error — runs the `else` block.
-`@name` is bound before `else`, so the error is accessible via `.getError()`.
+`do` executes and checks for `Ok`. If not `Ok` — runs the `else` block.
+No automatic unwrap — always use `.get()` explicitly.
 
 ```
-# Handle error with access to it
+# Handle error
 do @conn = connect("localhost", 8080) else:
-  echo("Failed: ", conn.getError())
+  echo(conn)              # conn is the error value itself
   quit()
+@c = conn.get()           # explicit unwrap — always required
 
 # Log and continue
 do @cfg = readConfig("app.toml") else:
-  echo("Config error: ", cfg.getError())
+  echo("Config failed: ", cfg)
 
 # Fallback value
 do @cfg = readConfig("app.toml") else:
-  @cfg = Config.default()
+  @cfg = Ok(Config.default())
 
 # One-liner
 do @conn = connect("localhost", 8080) else: quit()
@@ -1391,13 +1517,17 @@ do @conn = connect("localhost", 8080) else: quit()
 #### 3. `case` — pattern match on all cases
 
 ```
-case readConfig("app.toml"):
-  of ok:
-    start(cfg.get())
-  of error(IoError.notFound):
-    createDefault()
-  of error:
-    quit(cfg.getError())
+@response = fetch("http://api.com/data")
+case response:
+  of Ok:
+    @data = response.get()
+    echo(data)
+  of ServerError:
+    echo("server error")
+  of NetworkError:
+    echo("network error")
+  else:
+    db.close()
 ```
 
 ### Summary
@@ -1405,8 +1535,9 @@ case readConfig("app.toml"):
 | Syntax | What it does |
 |--------|-------------|
 | `?` | Propagate error to caller |
-| `do @x = f() else:` | Check Result, handle error inline |
-| `case` | Full pattern match on error types |
+| `.get()` | Explicit unwrap of `Ok[T]` — always required |
+| `do @x = f() else:` | Check for `Ok`, handle error inline |
+| `case` | Pattern match on `Ok` and specific error types |
 | `raise` | Return an error from function |
 
 ## Tooling (built into compiler)

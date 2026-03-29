@@ -97,6 +97,13 @@ pub enum Stmt {
         value: Option<Expr>,
     },
 
+    // do @x = expr() else: block
+    DoElse {
+        name: String,
+        value: Expr,
+        else_body: Vec<Stmt>,
+    },
+
     // Assignment
     Assign {
         target: Expr,

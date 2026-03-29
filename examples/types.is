@@ -15,18 +15,18 @@
 
 # Create a point
 @p = Point(10, 20)
-echo(p.x)
-echo(p.y)
+*echo(p.x)
+*echo(p.y)
 
 # Use enum
 @c = Color.red
-echo(c)
+*echo(c)
 
 # Case
 case c:
-  of Color.red:
-    echo("Red!")
-  of Color.green:
-    echo("Green!")
-  of Color.blue:
-    echo("Blue!")
+  of red:
+    *echo("Red!")
+  of green:
+    *echo("Green!")
+  of blue:
+    *echo("Blue!")

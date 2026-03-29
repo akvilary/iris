@@ -1,20 +1,20 @@
 # Hello World in Iris
-echo("hello world")
+*echo("hello world")
 
 @name = "Alice"
 @age = 30
-echo("Hello, {name}!")
+*echo("Hello, {name}!")
 
 if age > 18:
-  echo("adult")
+  *echo("adult")
 else:
-  echo("minor")
+  *echo("minor")
 
 for @i in 0..<10:
-  echo(i)
+  *echo(i)
 
 @add+ func(@a int,@b int) -> int:
   result = a + b
 
 @sum+ = add(a=10, b=20)
-echo(sum)
+*echo(sum)

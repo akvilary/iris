@@ -5,7 +5,7 @@
 @greeting = "Welcome to Iris!"
 @counter mut = 0
 
-echo(greeting)
+*echo(greeting)
 
 # Functions
 @factorial+ func(@n int) -> int:
@@ -24,19 +24,19 @@ echo(greeting)
   result = fib(n - 1) + fib(n - 2)
 
 # Loops and ranges
-echo("Factorials:")
+*echo("Factorials:")
 for @i in 1..10:
   @f = factorial(i)
-  echo(f)
+  *echo(f)
 
-echo("Fibonacci:")
+*echo("Fibonacci:")
 for @i in 0..<10:
-  echo(fib(i))
+  *echo(fib(i))
 
 # Counter with while
 while counter < 5:
   counter = counter + 1
-echo(counter)
+*echo(counter)
 
 # Nested if
 @classify+ func(@n int) -> int:
@@ -47,6 +47,6 @@ echo(counter)
   else:
     result = 0
 
-echo(classify(42))
-echo(classify(-7))
-echo(classify(0))
+*echo(classify(42))
+*echo(classify(-7))
+*echo(classify(0))

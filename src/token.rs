@@ -15,7 +15,7 @@ pub enum TokenKind {
     Ident(String),
 
     // Keywords
-    Func, Const, Mut,
+    Func, Const, Mut, Do,
     If, Elif, Else,
     While, For, In,
     Break, Continue, Return, Result,
@@ -90,6 +90,7 @@ impl TokenKind {
             "func" => TokenKind::Func,
             "const" => TokenKind::Const,
             "mut" => TokenKind::Mut,
+            "do" => TokenKind::Do,
             "if" => TokenKind::If,
             "elif" => TokenKind::Elif,
             "else" => TokenKind::Else,

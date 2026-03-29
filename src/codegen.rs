@@ -56,8 +56,8 @@ impl CodeGen {
                 "float" | "float64" => "double",
                 "float32" => "float",
                 "bool" => "bool",
-                "str" => "const char*",
-                "String" => "const char*",  // TODO: heap string type
+                "str" => "iris_str",
+                "String" => "iris_String",
                 "natural" => "uint64_t",
                 "rune" => "int32_t",
                 other => other,
@@ -84,7 +84,7 @@ impl CodeGen {
             Expr::BoolLit(_) => ("%s", false),
             Expr::Dollar(_) => ("%s", false),
             Expr::Ident(name) => match self.var_c_type(name) {
-                Some("const char*") => ("%s", false),
+                Some("const char*") | Some("iris_str") | Some("iris_String") => ("%s", false),
                 Some("bool") => ("%s", false),
                 Some("double") | Some("float") => ("%f", false),
                 _ => ("%lld", true),
@@ -127,6 +127,23 @@ impl CodeGen {
         self.emit("#include <stdbool.h>\n");
         self.emit("#include <string.h>\n");
         self.emit("#include <stdlib.h>\n\n");
+
+        // Built-in types
+        self.emit("// iris str — stack-allocated, immutable, max 256 bytes\n");
+        self.emit("// data is always null-terminated: data[len] == '\\0'\n");
+        self.emit("typedef struct { uint8_t len; char data[255]; } iris_str;\n");
+        self.emit("static inline iris_str iris_str_from(const char* s) {\n");
+        self.emit("  iris_str r = {0};\n");
+        self.emit("  r.len = (uint8_t)strlen(s);\n");
+        self.emit("  if (r.len > 254) r.len = 254;\n");
+        self.emit("  memcpy(r.data, s, r.len);\n");
+        self.emit("  r.data[r.len] = '\\0';\n");
+        self.emit("  return r;\n");
+        self.emit("}\n\n");
+
+        // iris String — heap-allocated, mutable, growable
+        self.emit("// iris String — heap-allocated, mutable, growable\n");
+        self.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n");
 
         // Forward declarations for functions
         let decls: Vec<String> = stmts.iter().filter_map(|s| {
@@ -187,21 +204,29 @@ impl CodeGen {
     fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Decl { name, modifier, value, .. } => {
+                let c_type = if let Some(val) = value {
+                    self.infer_c_type(val)
+                } else {
+                    "int64_t".to_string()
+                };
+                self.var_types.insert(name.clone(), c_type.clone());
+                self.emit_indent();
                 match modifier {
-                    DeclModifier::Const => {
-                        if let Some(val) = value {
-                            let c_type = self.infer_c_type(val);
-                            self.var_types.insert(name.clone(), c_type.clone());
-                            self.emit_indent();
-                            self.emit(&format!("const {} {} = ", c_type, name));
-                            self.gen_expr(val);
-                            self.emit(";\n");
-                        }
+                    // @x = val → const (immutable by default)
+                    DeclModifier::Default | DeclModifier::Const => {
+                        self.emit(&format!("const {} {} = ", c_type, name));
                     }
-                    _ => {
-                        self.gen_var_decl(name, value);
+                    // @x mut = val → mutable
+                    DeclModifier::Mut => {
+                        self.emit(&format!("{} {} = ", c_type, name));
                     }
                 }
+                if let Some(val) = value {
+                    self.gen_expr(val);
+                } else {
+                    self.emit("0");
+                }
+                self.emit(";\n");
             }
             Stmt::Assign { target, value } => {
                 self.emit_indent();
@@ -239,6 +264,23 @@ impl CodeGen {
                     Some(lbl) => self.emit_line(&format!("goto {}_start;", lbl)),
                     None => self.emit_line("continue;"),
                 }
+            }
+            Stmt::DoElse { name, value, else_body } => {
+                // do @name = expr() else: block
+                // → var = expr(); if (!var.__ok) { else_body }
+                let c_type = self.infer_c_type(value);
+                self.var_types.insert(name.clone(), c_type.clone());
+                self.emit_indent();
+                self.emit(&format!("{} {} = ", c_type, name));
+                self.gen_expr(value);
+                self.emit(";\n");
+                // TODO: proper Result checking; for now emit if(!name) as placeholder
+                self.emit_indent();
+                self.emit(&format!("if (!{}) {{\n", name));
+                self.indent += 1;
+                for s in else_body { self.gen_stmt(s); }
+                self.indent -= 1;
+                self.emit_line("}");
             }
             Stmt::Return => self.emit_line("return __result;"),
             Stmt::ExprStmt(expr) => {
@@ -496,9 +538,9 @@ impl CodeGen {
             Expr::IntLit(n) => self.emit(&n.to_string()),
             Expr::FloatLit(n) => self.emit(&n.to_string()),
             Expr::StringLit(s) => {
-                self.emit("\"");
+                self.emit("iris_str_from(\"");
                 self.emit(&Self::escape_c_string(s));
-                self.emit("\"");
+                self.emit("\")");
             }
             Expr::RuneLit(c) => self.emit(&format!("'{}'", c)),
             Expr::BoolLit(b) => self.emit(if *b { "true" } else { "false" }),
@@ -648,6 +690,9 @@ impl CodeGen {
             Expr::Ident(name) if self.var_c_type(name) == Some("bool") => {
                 self.emit(&format!("({} ? \"true\" : \"false\")", name));
             }
+            Expr::Ident(name) if self.var_c_type(name) == Some("iris_str") => {
+                self.emit(&format!("{}.data", name));
+            }
             Expr::Dollar(inner) => {
                 self.gen_dollar(inner);
             }
@@ -661,6 +706,7 @@ impl CodeGen {
                 match self.var_c_type(name) {
                     Some("bool") => self.emit(&format!("({} ? \"true\" : \"false\")", name)),
                     Some("const char*") => self.emit(name),
+                    Some("iris_str") => self.emit(&format!("{}.data", name)),
                     _ => {
                         for en in &self.enum_names.clone() {
                             if self.var_c_type(name) == Some(en.as_str()) {
@@ -693,7 +739,7 @@ impl CodeGen {
         match expr {
             Expr::IntLit(_) => "int64_t",
             Expr::FloatLit(_) => "double",
-            Expr::StringLit(_) | Expr::StringInterp { .. } => "const char*",
+            Expr::StringLit(_) | Expr::StringInterp { .. } => "iris_str",
             Expr::BoolLit(_) => "bool",
             Expr::RuneLit(_) => "int32_t",
             Expr::Binary { op, left, .. } => match op {

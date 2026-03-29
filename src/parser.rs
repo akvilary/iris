@@ -132,6 +132,7 @@ impl Parser {
             TokenKind::Quit => Some("quit"),
             TokenKind::Own => Some("own"),
             TokenKind::Discard => Some("discard"),
+            TokenKind::Do => Some("do"),
             _ => None,
         }
     }
@@ -163,6 +164,8 @@ impl Parser {
         match self.peek().clone() {
             // @ starts all declarations
             TokenKind::At => self.parse_decl(),
+            // do @x = expr() else: block
+            TokenKind::Do => self.parse_do_else(),
             // Control flow (unlabeled)
             TokenKind::If => self.parse_if_stmt(),
             TokenKind::While => { self.advance(); self.parse_while_body(None) }
@@ -183,6 +186,18 @@ impl Parser {
             TokenKind::Import => { self.advance(); Ok(Stmt::Import(self.parse_ident_name()?)) }
             // Other
             TokenKind::Raise => { self.advance(); Ok(Stmt::Raise(self.parse_expr()?)) }
+            TokenKind::Quit => {
+                self.advance();
+                let arg = if self.at(&TokenKind::LParen) {
+                    self.advance();
+                    let expr = if !self.at(&TokenKind::RParen) { Some(self.parse_expr()?) } else { None };
+                    self.expect(&TokenKind::RParen)?;
+                    expr
+                } else {
+                    None
+                };
+                Ok(Stmt::Quit(arg))
+            }
             TokenKind::Discard => { self.advance(); Ok(Stmt::Discard) }
             // Expression or assignment
             _ => self.parse_expr_or_assign(),
@@ -429,6 +444,21 @@ impl Parser {
         self.advance();
         self.expect(&TokenKind::Eq)?;
         Ok(Stmt::ResultAssign { value: self.parse_expr()? })
+    }
+
+    // ── do...else ──
+
+    /// Parse `do @name = expr() else: block`
+    fn parse_do_else(&mut self) -> CompileResult<Stmt> {
+        self.advance(); // skip 'do'
+        let name = self.parse_at_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+        self.expect(&TokenKind::Else)?;
+        self.expect(&TokenKind::Colon)?;
+        self.skip_newlines();
+        let else_body = self.parse_block_body()?;
+        Ok(Stmt::DoElse { name, value, else_body })
     }
 
     // ── Case ──

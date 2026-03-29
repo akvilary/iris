@@ -3,17 +3,17 @@
 # Bool
 @isReady = true
 @isDone = false
-echo(isReady)
-echo(isDone)
+*echo(isReady)
+*echo(isDone)
 
 # Float
 @pi = 3.14159
-echo(pi)
+*echo(pi)
 
 # String interpolation
 @name = "Iris"
 @version = 1
-echo("Welcome to {name}!")
+*echo("Welcome to {name}!")
 
 # $ operator on enum
 @HttpMethod+ enum:
@@ -21,10 +21,10 @@ echo("Welcome to {name}!")
   @post = "POST"
 
 @method = HttpMethod.get
-echo($method)
+*echo($method)
 
 # Bool in interpolation
-echo("Ready: {isReady}")
+*echo("Ready: {isReady}")
 
 # Nested function calls
 @twice+ func(@n int) -> int:
@@ -33,4 +33,4 @@ echo("Ready: {isReady}")
 @quadruple+ func(@n int) -> int:
   result = twice(twice(n))
 
-echo(quadruple(5))
+*echo(quadruple(5))
