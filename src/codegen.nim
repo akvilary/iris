@@ -134,15 +134,16 @@ proc inferCType(g: CodeGen, e: Expr): string =
     return g.inferCType(b.left)
   if e of CallExpr:
     let c = CallExpr(e)
-    # .get() → unwrap, return the value type (not Result type)
     if c.fn of FieldAccessExpr:
       let fa = FieldAccessExpr(c.fn)
       if fa.field == "get":
-        let ct = g.inferCType(fa.expr)
-        # For Result types, .get() returns the value type — simplified for now
-        return "int64_t"
+        return "int64_t"  # simplified
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
+      if name == "some" and c.args.len == 1:
+        return "iris_Option_" & g.inferCType(c.args[0].value)
+      if name == "none":
+        return "iris_Option_int64_t"  # default, needs type param
       if name in g.typeFields: return name
       if name in g.fnReturnTypes: return g.fnReturnTypes[name]
       return g.varTypes.getOrDefault(name, "int64_t")
@@ -159,6 +160,8 @@ proc inferCType(g: CodeGen, e: Expr): string =
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   return "int64_t"
+
+proc ensureOptionType(g: var CodeGen, valType, optType: string)
 
 # ── Expression codegen ──
 
@@ -276,6 +279,25 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let name = IdentExpr(c.fn).name
       if name == "echo":
         g.genEcho(c.args); return
+      # some(value) → Option struct with has=true
+      if name == "some" and c.args.len == 1:
+        let valType = g.inferCType(c.args[0].value)
+        let optType = "iris_Option_" & valType
+        g.ensureOptionType(valType, optType)
+        g.emit("(" & optType & "){.has = true, .value = ")
+        g.genExpr(c.args[0].value)
+        g.emit("}")
+        return
+      # none(Type) → Option struct with has=false
+      if name == "none" and c.args.len == 1:
+        # none(int) — arg is parsed as ident "int", treat as type name
+        if c.args[0].value of IdentExpr:
+          let typeName = IdentExpr(c.args[0].value).name
+          let valType = g.typeToCStr(NamedType(name: typeName))
+          let optType = "iris_Option_" & valType
+          g.ensureOptionType(valType, optType)
+          g.emit("(" & optType & "){.has = false}")
+          return
       # Struct constructor
       if name in g.typeFields:
         let fields = g.typeFields[name]
@@ -377,6 +399,16 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.emit("}")
   else:
     g.emit("/* expr not implemented */")
+
+# ── Condition helper ──
+
+proc genCondExpr(g: var CodeGen, e: Expr) =
+  ## Generate condition expression — Option types check .has
+  if e of IdentExpr:
+    let ct = g.varCType(IdentExpr(e).name)
+    if ct.startsWith("iris_Option_"):
+      g.genExpr(e); g.emit(".has"); return
+  g.genExpr(e)
 
 # ── Statement codegen ──
 
@@ -481,7 +513,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     for i, b in ifs.branches:
       g.emitIndent()
       g.emit(if i == 0: "if (" else: "else if (")
-      g.genExpr(b.cond); g.emit(") {\n")
+      g.genCondExpr(b.cond); g.emit(") {\n")
       g.indent += 1
       for st in b.body: g.genStmt(st)
       g.indent -= 1
@@ -497,7 +529,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
   elif s of WhileStmt:
     let w = WhileStmt(s)
     if w.label.len > 0: g.emitLine(w.label & "_start:")
-    g.emitIndent(); g.emit("while ("); g.genExpr(w.condition); g.emit(") {\n")
+    g.emitIndent(); g.emit("while ("); g.genCondExpr(w.condition); g.emit(") {\n")
     g.indent += 1
     for st in w.body: g.genStmt(st)
     g.indent -= 1
@@ -632,11 +664,13 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     # Infer type context for case expression
     var enumType = ""
     var variantVar = ""
-    var resultType = ""  # non-empty if case on a Result type
+    var resultType = ""
+    var optionType = false
     if cs.expr of IdentExpr:
       let ct = g.varCType(IdentExpr(cs.expr).name)
       if ct in g.enumNames: enumType = ct
       elif ct.endsWith("_Result"): resultType = ct
+      elif ct.startsWith("iris_Option_"): optionType = true
     elif cs.expr of FieldAccessExpr:
       let fa = FieldAccessExpr(cs.expr)
       if fa.expr of IdentExpr:
@@ -647,6 +681,33 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           if fa.field == vi.tagName:
             variantVar = objName
             enumType = vi.tagType
+    # Option type → generate if/else instead of switch
+    if optionType:
+      var first = true
+      for b in cs.branches:
+        g.emitIndent()
+        if b.pattern.kind == patSome:
+          g.emit((if first: "if (" else: "else if ("))
+          g.genExpr(cs.expr); g.emit(".has) {\n")
+        elif b.pattern.kind == patNone:
+          g.emit((if first: "if (!" else: "else if (!"))
+          g.genExpr(cs.expr); g.emit(".has) {\n")
+        else:
+          g.emit("/* unknown option pattern */ {\n")
+        first = false
+        g.indent += 1
+        for st in b.body: g.genStmt(st)
+        g.indent -= 1
+        g.emitIndent(); g.emit("} ")
+      if cs.elseBranch.len > 0:
+        g.emit("else {\n")
+        g.indent += 1
+        for st in cs.elseBranch: g.genStmt(st)
+        g.indent -= 1
+        g.emitIndent(); g.emit("}")
+      g.emit("\n")
+      return  # done, skip switch logic below
+
     g.emitIndent()
     if resultType.len > 0:
       g.emit("switch ("); g.genExpr(cs.expr); g.emit(".kind) {\n")
@@ -747,6 +808,21 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("  return r;\n")
   g.emit("}\n\n")
   g.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n")
+
+  # Common Option types
+  g.emit("// Option types\n")
+  for t in ["int64_t", "double", "bool", "iris_str"]:
+    let optName = "iris_Option_" & t
+    g.emit("typedef struct { bool has; " & t & " value; } " & optName & ";\n")
+    g.okTypes.add(optName)
+  g.emit("\n")
+
+proc ensureOptionType(g: var CodeGen, valType, optType: string) =
+  ## Emit Option typedef if not yet emitted.
+  if optType notin g.okTypes:
+    g.okTypes.add(optType)
+    # Emit inline — this works for types defined before first use
+    g.emit("typedef struct { bool has; " & valType & " value; } " & optType & ";\n")
 
 proc sanitizeModName*(name: string): string =
   ## Convert module path to valid C identifier: utils/calc → utils_calc

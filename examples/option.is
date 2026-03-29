@@ -1,0 +1,24 @@
+# Option[T] — some/none
+
+@a = some(42)
+@b = none(int)
+
+# if — truthy check
+if a:
+  *echo(a.get())
+
+if b:
+  *echo("unreachable")
+
+# case of some/none
+case a:
+  of some:
+    *echo(a.get())
+  of none:
+    *echo("nothing")
+
+case b:
+  of some:
+    *echo("unreachable")
+  of none:
+    *echo("none!")
