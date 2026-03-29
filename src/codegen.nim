@@ -455,8 +455,14 @@ proc genStmt(g: var CodeGen, s: Stmt) =
           g.emitLine("case " & enumType & "_" & b.pattern.name & ":")
         else:
           g.emitLine("case " & b.pattern.name & ":")
-      else:
-        g.emitLine("/* pattern not yet implemented */")
+      of patOk:
+        g.emitLine("/* of Ok — not yet implemented */")
+      of patError:
+        g.emitLine("/* of Error — not yet implemented */")
+      of patSome:
+        g.emitLine("/* of some — not yet implemented */")
+      of patNone:
+        g.emitLine("/* of none — not yet implemented */")
       g.indent += 1
       for st in b.body: g.genStmt(st)
       g.emitLine("break;")
@@ -467,6 +473,9 @@ proc genStmt(g: var CodeGen, s: Stmt) =
       for st in cs.elseBranch: g.genStmt(st)
       g.emitLine("break;")
       g.indent -= 1
+    else:
+      # Exhaustive — hint to C compiler that all cases are covered
+      g.emitLine("default: __builtin_unreachable();")
     g.indent -= 1
     g.emitLine("}")
 
