@@ -34,6 +34,7 @@ type
     # Operators
     tkPlus, tkMinus, tkStar, tkSlash, tkPercent
     tkEq, tkEqEq, tkNotEq
+    tkPlusEq, tkMinusEq, tkStarEq, tkSlashEq
     tkLess, tkLessEq, tkGreater, tkGreaterEq
     tkArrow       # ->
     tkDotDot      # ..

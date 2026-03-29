@@ -152,6 +152,11 @@ type
     target*: Expr
     value*: Expr
 
+  CompoundAssignStmt* = ref object of Stmt
+    target*: Expr
+    op*: BinOp
+    value*: Expr
+
   ResultAssignStmt* = ref object of Stmt
     value*: Expr
 

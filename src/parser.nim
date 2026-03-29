@@ -732,11 +732,23 @@ proc parseStmt*(P: var Parser): Stmt =
     discard P.advance()
     DiscardStmt()
   else:
-    # Expression or assignment
+    # Expression, assignment, or compound assignment
     let expr = P.parseExpr()
     if P.at(tkEq):
       discard P.advance()
       AssignStmt(target: expr, value: P.parseExpr())
+    elif P.at(tkPlusEq):
+      discard P.advance()
+      CompoundAssignStmt(target: expr, op: opAdd, value: P.parseExpr())
+    elif P.at(tkMinusEq):
+      discard P.advance()
+      CompoundAssignStmt(target: expr, op: opSub, value: P.parseExpr())
+    elif P.at(tkStarEq):
+      discard P.advance()
+      CompoundAssignStmt(target: expr, op: opMul, value: P.parseExpr())
+    elif P.at(tkSlashEq):
+      discard P.advance()
+      CompoundAssignStmt(target: expr, op: opDiv, value: P.parseExpr())
     else:
       ExprStmt(expr: expr)
 

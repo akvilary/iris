@@ -446,6 +446,17 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.indent -= 1
     g.emitLine("}")
 
+  elif s of CompoundAssignStmt:
+    let ca = CompoundAssignStmt(s)
+    g.emitIndent(); g.genExpr(ca.target)
+    g.emit(case ca.op
+      of opAdd: " += "
+      of opSub: " -= "
+      of opMul: " *= "
+      of opDiv: " /= "
+      else: " ?= ")
+    g.genExpr(ca.value); g.emit(";\n")
+
   elif s of AssignStmt:
     let a = AssignStmt(s)
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")

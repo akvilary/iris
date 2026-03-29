@@ -219,9 +219,18 @@ proc readOperator(L: var Lexer): bool =
     L.tokens.add(newToken(k, line, col, 2))
 
   case L.peek()
-  of '+': emit1(tkPlus)
-  of '*': emit1(tkStar)
-  of '/': emit1(tkSlash)
+  of '+':
+    discard L.advance()
+    if L.peek() == '=': discard L.advance(); L.tokens.add(newToken(tkPlusEq, line, col, 2))
+    else: L.tokens.add(newToken(tkPlus, line, col, 1))
+  of '*':
+    discard L.advance()
+    if L.peek() == '=': discard L.advance(); L.tokens.add(newToken(tkStarEq, line, col, 2))
+    else: L.tokens.add(newToken(tkStar, line, col, 1))
+  of '/':
+    discard L.advance()
+    if L.peek() == '=': discard L.advance(); L.tokens.add(newToken(tkSlashEq, line, col, 2))
+    else: L.tokens.add(newToken(tkSlash, line, col, 1))
   of '%': emit1(tkPercent)
   of ':': emit1(tkColon)
   of ',': emit1(tkComma)
@@ -242,6 +251,9 @@ proc readOperator(L: var Lexer): bool =
     if L.peek() == '>':
       discard L.advance()
       L.tokens.add(newToken(tkArrow, line, col, 2))
+    elif L.peek() == '=':
+      discard L.advance()
+      L.tokens.add(newToken(tkMinusEq, line, col, 2))
     else:
       L.tokens.add(newToken(tkMinus, line, col, 1))
   of '=':
