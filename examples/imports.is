@@ -1,0 +1,8 @@
+# Module import example
+
+import mymath
+
+@x = mymath.add(10, 20)
+@y = mymath.mul(3, 4)
+*echo(x)
+*echo(y)

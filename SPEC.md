@@ -330,21 +330,21 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 Return value is set explicitly:
 
 ```
-@add+ func(@a int, @b int) -> int:
+@add+ func(@a int, @b int) ok int:
   result = a + b
 
-@findUser+ func(@id int) -> User | !NotFoundError:
+@findUser+ func(@id int) ok User else NotFoundError:
   @user = db.query(id)?
   result = user
 
 # result can be set anywhere, including branches:
-@classify+ func(@n int) -> str:
+@classify+ func(@n int) ok String:
   if n > 0:
-    result = "positive"
+    result = String("positive")
   elif n < 0:
-    result = "negative"
+    result = String("negative")
   else:
-    result = "zero"
+    result = String("zero")
 
 # result can be set early and execution continues:
 @process+ func(@data slice[byte]) -> int:
@@ -803,47 +803,96 @@ case a:
 
 ## Strings
 
-Two string types — explicit about where data lives:
+Two string types, like Rust — explicit about where data lives:
 
-| Type | Where | Max size | Mutability | Rust analogy |
-|------|-------|----------|------------|--------------|
-| `str` | Stack | 256 bytes | Immutable | Fixed `[u8; 256]` |
-| `String` | Heap | Unlimited | Mutable, growable | `String` |
+| Type | What | Size on stack | Mutability | Rust analogy |
+|------|------|---------------|------------|--------------|
+| `str` | Immutable view (pointer + length) | 16 bytes (64-bit) | Immutable | `&str` |
+| `String` | Owned heap buffer | 24 bytes (64-bit) | Mutable, growable | `String` |
 
-- UTF-8 by default
-- `str` — stack-allocated, immutable, max 256 bytes. No SSO, no hidden heap.
-  Literal too long → compile error. Runtime overflow → runtime error.
-- `String` — heap-allocated, growable, mutable buffer.
-  Use for large/dynamic text: file contents, network data, building strings.
+- UTF-8 by default.
+- No null-termination guarantee — length is always explicit.
+- `str` — a **fat pointer**: `(const char* data, size_t len)`.
+  Does not own data, does not allocate. Points to data stored elsewhere:
+  string literals (`.rodata`), `String` buffer (heap), or other sources.
+- `String` — an **owned heap buffer**: `(char* data, size_t len, size_t cap)`.
+  Growable, mutable. Use for dynamic text: file contents, network data,
+  building strings. Freed automatically at scope end.
+- `String` auto-converts to `str` when passed where `str` is expected
+  (like Rust's `Deref<Target=str>`). Zero-cost — just takes pointer and length.
 - Interpolation: `"hello {name}"` — built into lexer, works everywhere.
 
-#### `str` stack optimization
-
-Since `str` is immutable, the compiler optimizes stack allocation
-when the size is known at compile time:
-
-| Situation | Stack size |
-|-----------|-----------|
-| `@x str = "Hi"` | 3 bytes (compiler knows length) |
-| `@x str = if c: "a" else: "bb"` | 3 bytes (max of branches) |
-| `@x str = runtimeFunc()` | 256 bytes (max, length unknown) |
-| `func(@s str)` parameter | Passed by reference automatically (8 bytes) |
-
-The 256-byte max is a **type guarantee**, not always the actual allocation.
-The compiler allocates only what is needed when the value is known.
+#### Memory layout
 
 ```
-@name str = "Alice"                   # stack, 6 bytes (optimized)
-@greeting str = "Hello, {name}!"     # stack, compiler computes size
+str (16 bytes on 64-bit):
+┌──────────────┬──────────────┐
+│ const char*  │  size_t len  │
+│   (8 bytes)  │   (8 bytes)  │
+└──────┬───────┴──────────────┘
+       │
+       ▼
+  data stored elsewhere (.rodata, heap, ...)
 
-@greet func(@s str):                  # passed by reference (auto), 8 bytes
+String (24 bytes on 64-bit):
+┌──────────────┬──────────────┬──────────────┐
+│   char*      │  size_t len  │  size_t cap  │
+│  (8 bytes)   │   (8 bytes)  │   (8 bytes)  │
+└──────┬───────┴──────────────┴──────────────┘
+       │
+       ▼
+  heap-allocated buffer (owned, freed at scope end)
+```
+
+#### Where `str` points
+
+| Expression | `str` points to | Allocation |
+|-----------|-----------------|------------|
+| `@x str = "hello"` | `.rodata` (binary) | None — zero-cost |
+| `@x str = myString` | `String`'s heap buffer | None — just a view |
+| `@x str = someFunc()` | depends on return | Borrow checker validates |
+
+#### Safety — borrow checker
+
+`str` is a borrow — the borrow checker guarantees it never outlives
+the data it points to. No dangling pointers, no use-after-free:
+
+```
+# OK — literal lives forever ('static)
+@greet func() -> str:
+  return "hello"
+
+# OK — result lifetime tied to parameter (rule 2)
+@first_word func(@s str) -> str:
+  return s.split(" ")[0]
+
+# OK — both params, result tied to both (rule 3)
+@longest func(@x str, @y str) -> str:
+  result = if x.len > y.len: x else: y
+
+# COMPILE ERROR — local String dies, str would dangle
+@bad func() -> str:
+  @s String = "hello"
+  return s              # error: str borrows from s, which is dropped here
+```
+
+#### Usage
+
+```
+@name str = "Alice"                   # view into .rodata, 0 allocations
+@greeting str = "Hello, {name}!"     # interpolation
+
+@greet func(@s str):                  # accepts str view (16 bytes)
   *echo(s)
+
+greet(name)                           # str → str, direct
+greet(buf)                            # String → str, auto-convert (zero-cost)
 
 # For large/dynamic text — use String (heap)
 @buf mut String = String.new()
 buf.append("part1")
 buf.append("part2")
-@result str = buf.toStr()            # copy to stack str (must fit 256 bytes)
+@view str = buf                       # view into buf's heap data
 
 @big String = readFile("big.txt")    # heap, no size limit
 ```

@@ -1,0 +1,6 @@
+# from import — only specified names available directly
+
+from mymath import add
+
+@x = add(10, 20)
+*echo(x)

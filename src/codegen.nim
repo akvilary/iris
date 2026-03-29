@@ -14,17 +14,21 @@ type
     fields*: seq[VariantFieldInfo]
 
   CodeGen* = object
-    output: string
-    indent: int
+    output*: string
+    indent*: int
     varTypes: Table[string, string]
     typeFields: Table[string, seq[tuple[name, ctype: string]]]
     enumNames: seq[string]
     variantInfo: Table[string, VariantInfo]  # type name -> variant info
     activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
-    okTypes: seq[string]  # Ok types already emitted
-    fnReturnTypes: Table[string, string]  # func name -> C return type
+    okTypes*: seq[string]  # Ok types already emitted
+    fnReturnTypes*: Table[string, string]  # func name -> C return type
     inResultFunc: bool    # inside a function with error types
     currentResultName: string  # e.g. "divide_Result"
+    moduleName: string    # current module name (empty = main)
+    importedModules*: seq[string]  # list of imported module names
+    modulePublicNames*: Table[string, seq[string]]  # module -> list of public names
+    nameAliases*: Table[string, string]  # local name -> C name (from imports)
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -34,17 +38,17 @@ proc newCodeGen*(): CodeGen =
 
 # ── Emit helpers ──
 
-proc emit(g: var CodeGen, s: string) = g.output.add(s)
+proc emit*(g: var CodeGen, s: string) = g.output.add(s)
 
 proc emitIndent(g: var CodeGen) =
   for _ in 0..<g.indent: g.output.add("  ")
 
-proc emitLine(g: var CodeGen, s: string) =
+proc emitLine*(g: var CodeGen, s: string) =
   g.emitIndent(); g.emit(s); g.emit("\n")
 
 # ── Type mapping ──
 
-proc typeToCStr(g: CodeGen, t: TypeExpr): string =
+proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
   if t == nil: return "void"
   if t of NamedType:
     let n = NamedType(t).name
@@ -86,7 +90,7 @@ proc escapeC(s: string): string =
     of '%': result.add("%%")
     else: result.add(ch)
 
-proc formatParams(g: CodeGen, params: seq[Param]): string =
+proc formatParams*(g: CodeGen, params: seq[Param]): string =
   if params.len == 0: return "void"
   params.mapIt(g.typeToCStr(it.typeAnn) & " " & it.name).join(", ")
 
@@ -229,7 +233,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
   elif e of RuneLitExpr:
     g.emit("'" & $RuneLitExpr(e).val & "'")
   elif e of IdentExpr:
-    g.emit(IdentExpr(e).name)
+    let name = IdentExpr(e).name
+    if name in g.nameAliases:
+      g.emit(g.nameAliases[name])
+    else:
+      g.emit(name)
   elif e of BinaryExpr:
     let b = BinaryExpr(e)
     g.emit("("); g.genExpr(b.left)
@@ -309,6 +317,13 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let f = FieldAccessExpr(e)
     if f.expr of IdentExpr:
       let name = IdentExpr(f.expr).name
+      # Module access: math.add → math_add
+      if name in g.importedModules:
+        if name in g.modulePublicNames:
+          if f.field notin g.modulePublicNames[name]:
+            raise newException(ValueError,
+              "error: '" & f.field & "' is not public in module '" & name & "'")
+        g.emit(name & "_" & f.field); return
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
       # Check variant field access
@@ -364,9 +379,9 @@ proc genExpr(g: var CodeGen, e: Expr) =
 
 # ── Statement codegen ──
 
-proc genStmt(g: var CodeGen, s: Stmt)
+proc genStmt*(g: var CodeGen, s: Stmt)
 
-proc genStmt(g: var CodeGen, s: Stmt) =
+proc genStmt*(g: var CodeGen, s: Stmt) =
   if s of DeclStmt:
     let d = DeclStmt(s)
     let ctype = if d.value != nil: g.inferCType(d.value) else: "int64_t"
@@ -712,16 +727,14 @@ proc genStmt(g: var CodeGen, s: Stmt) =
   else:
     g.emitLine("/* not yet implemented */")
 
-# ── Main entry ──
+# ── Helpers ──
 
-proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
+proc emitPreamble*(g: var CodeGen) =
   g.emit("#include <stdio.h>\n")
   g.emit("#include <stdint.h>\n")
   g.emit("#include <stdbool.h>\n")
   g.emit("#include <string.h>\n")
   g.emit("#include <stdlib.h>\n\n")
-
-  # iris_str type
   g.emit("// iris str — stack-allocated, immutable, max 256 bytes\n")
   g.emit("typedef struct { uint8_t len; char data[255]; } iris_str;\n")
   g.emit("static inline iris_str iris_str_from(const char* s) {\n")
@@ -733,6 +746,18 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   g.emit("  return r;\n")
   g.emit("}\n\n")
   g.emit("typedef struct { char* data; uint32_t len; uint32_t cap; } iris_String;\n\n")
+
+proc cName(g: CodeGen, name: string, public: bool): string =
+  ## Prefix name with module name for public symbols
+  if g.moduleName.len > 0:
+    g.moduleName & "_" & name
+  else:
+    name
+
+# ── Main entry ──
+
+proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
+  g.emitPreamble()
 
   # Types first
   for s in stmts:
@@ -783,4 +808,63 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
     g.indent -= 1
     g.emit("}\n")
 
+  result = g.output
+
+proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string =
+  ## Generate C file for a module (no main, prefix public names)
+  g.moduleName = modName
+  g.emitPreamble()
+
+  # Types
+  for s in stmts:
+    if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
+      g.genStmt(s); g.emit("\n")
+
+  # Forward declarations + result structs
+  for s in stmts:
+    if s of FnDeclStmt:
+      let f = FnDeclStmt(s)
+      if not f.public: continue  # only export public functions
+      let cname = modName & "_" & f.name
+      let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
+      g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ");\n")
+      g.fnReturnTypes[cname] = ret
+  g.emit("\n")
+
+  # Functions — public get prefixed, private get static
+  for s in stmts:
+    if s of FnDeclStmt:
+      let f = FnDeclStmt(s)
+      let hasReturn = f.returnType != nil
+      let ret = if hasReturn: g.typeToCStr(f.returnType) else: "void"
+      let cname = if f.public: modName & "_" & f.name else: f.name
+      if not f.public: g.emit("static ")
+      g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ") {\n")
+      g.indent += 1
+      if hasReturn: g.emitLine(ret & " __result;")
+      for st in f.body: g.genStmt(st)
+      if hasReturn: g.emitLine("return __result;")
+      g.indent -= 1
+      g.emit("}\n\n")
+
+  g.moduleName = ""
+  result = g.output
+
+proc generateHeader*(g: var CodeGen, stmts: seq[Stmt], modName: string): string =
+  ## Generate extern declarations for importing module
+  for s in stmts:
+    if s of FnDeclStmt:
+      let f = FnDeclStmt(s)
+      if not f.public: continue
+      let cname = modName & "_" & f.name
+      let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
+      g.emit("extern " & ret & " " & cname & "(" & g.formatParams(f.params) & ");\n")
+      g.fnReturnTypes[modName & "." & f.name] = ret
+  for s in stmts:
+    if s of ObjectDeclStmt:
+      let o = ObjectDeclStmt(s)
+      if o.public: g.emit("/* type " & o.name & " from " & modName & " */\n")
+    if s of EnumDeclStmt:
+      let e = EnumDeclStmt(s)
+      if e.public: g.emit("/* enum " & e.name & " from " & modName & " */\n")
   result = g.output

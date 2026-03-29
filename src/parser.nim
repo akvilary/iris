@@ -689,6 +689,16 @@ proc parseStmt*(P: var Parser): Stmt =
   of tkImport:
     discard P.advance()
     ImportStmt(module: P.parseIdentName())
+  of tkFrom:
+    discard P.advance()
+    let module = P.parseIdentName()
+    P.expect(tkImport)
+    var names: seq[string]
+    names.add(P.parseIdentName())
+    while P.at(tkComma):
+      discard P.advance()
+      names.add(P.parseIdentName())
+    FromImportStmt(module: module, names: names)
   of tkRaise:
     discard P.advance()
     RaiseStmt(expr: P.parseExpr())

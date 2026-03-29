@@ -253,6 +253,10 @@ type
   ImportStmt* = ref object of Stmt
     module*: string
 
+  FromImportStmt* = ref object of Stmt
+    module*: string
+    names*: seq[string]
+
   SpawnStmt* = ref object of Stmt
     body*: seq[Stmt]
 

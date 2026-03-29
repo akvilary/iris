@@ -1,0 +1,11 @@
+# Math module
+
+@add+ func(@a int, @b int) -> int:
+  result = a + b
+
+@mul+ func(@a int, @b int) -> int:
+  result = a * b
+
+# Private — should NOT be accessible from outside
+@secret func(@x int) -> int:
+  result = x * 42
