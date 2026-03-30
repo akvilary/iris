@@ -195,7 +195,7 @@ This allows using reserved words as field/variant names.
 
 ```
 @User! object:
-  @name! string
+  @name! view[Str]
   @age! int
 
 @Admin! object of User:
@@ -233,7 +233,7 @@ Public visibility via `!` after the name:
   result = helperFunc(x)
 
 @Config! object:
-  @host! string         # public field
+  @host! view[Str]         # public field
   @port! int            # public field
   @secret view[Str]        # private field
 
@@ -644,14 +644,14 @@ Inline hash table literal with `{key: value}`:
 # Create hash table:
 @headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
 
-# Type: HashTable[string, string]
-@scores: HashTable[string, int] = {"alice": 100, "bob": 85}
+# Type: HashTable[view[Str], view[Str]]
+@scores: HashTable[view[Str], int] = {"alice": 100, "bob": 85}
 
 # Access:
 *echo(headers["Content-Type"])
 
 # Empty:
-@empty = HashTable[string, int]()
+@empty = HashTable[view[Str], int]()
 ```
 
 ### HashSet
@@ -663,7 +663,7 @@ Inline hash set literal with `{values}`:
 # Type: HashSet[int]
 
 @names = {"Alice", "Bob", "Charlie"}
-# names of HashSet[string]
+# names of HashSet[view[Str]]
 
 if 2 in ids:
   *echo("found")
