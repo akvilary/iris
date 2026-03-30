@@ -32,6 +32,8 @@ Minimal compiler that can compile basic Iris programs to C.
 
 ### Phase 3 — Memory Safety
 
+- [ ] Semantic analyzer (between parser and codegen)
+- [ ] Reject view[T] in object fields and closure captures
 - [ ] Ownership + borrow checker (immutable borrow, mut, own)
 - [ ] Lifetime inference (3 rules, no annotations)
 - [ ] Pool for cyclic references
