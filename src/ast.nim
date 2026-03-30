@@ -101,6 +101,19 @@ type
   ArrayLitExpr* = ref object of Expr
     elems*: seq[Expr]
 
+  HashTableEntry* = object
+    key*: Expr
+    value*: Expr
+
+  HashTableLitExpr* = ref object of Expr
+    entries*: seq[HashTableEntry]
+
+  HashSetLitExpr* = ref object of Expr
+    elems*: seq[Expr]
+
+  HeapAllocExpr* = ref object of Expr
+    inner*: CallExpr  # the constructor call
+
   TupleElem* = object
     name*: string  # empty = unnamed
     value*: Expr

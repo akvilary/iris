@@ -130,6 +130,12 @@ proc inferCType(g: CodeGen, e: Expr): string =
   if e of FloatLitExpr: return "double"
   if e of StringLitExpr or e of StringInterpExpr: return "iris_view_Str"
   if e of StrLitExpr or e of StrInterpExpr: return "iris_Str"
+  if e of HashTableLitExpr: return "iris_HashTable"
+  if e of HashSetLitExpr: return "iris_HashSet"
+  if e of HeapAllocExpr:
+    let inner = HeapAllocExpr(e).inner
+    if inner.fn of IdentExpr:
+      return "iris_Heap_" & IdentExpr(inner.fn).name
   if e of BoolLitExpr: return "bool"
   if e of RuneLitExpr: return "int32_t"
   if e of BinaryExpr:
@@ -434,6 +440,36 @@ proc genExpr(g: var CodeGen, e: Expr) =
       if i > 0: g.emit(", ")
       g.genExpr(el)
     g.emit("}")
+  elif e of HashTableLitExpr:
+    let ht = HashTableLitExpr(e)
+    g.emit("iris_HashTable_from(" & $ht.entries.len)
+    for entry in ht.entries:
+      g.emit(", ")
+      g.genExpr(entry.key)
+      g.emit(", ")
+      g.genExpr(entry.value)
+    g.emit(")")
+  elif e of HashSetLitExpr:
+    let hs = HashSetLitExpr(e)
+    g.emit("iris_HashSet_from(" & $hs.elems.len)
+    for el in hs.elems:
+      g.emit(", ")
+      g.genExpr(el)
+    g.emit(")")
+  elif e of HeapAllocExpr:
+    let ha = HeapAllocExpr(e)
+    let typeName = if ha.inner.fn of IdentExpr: IdentExpr(ha.inner.fn).name
+                   else: "Unknown"
+    g.emit("iris_Heap_" & typeName & "_alloc((" & typeName & "){")
+    let fields = g.typeFields.getOrDefault(typeName, @[])
+    for i, arg in ha.inner.args:
+      if i > 0: g.emit(", ")
+      if arg.name.len > 0:
+        g.emit("." & arg.name & " = ")
+      elif i < fields.len:
+        g.emit("." & fields[i].name & " = ")
+      g.genExpr(arg.value)
+    g.emit("})")
   else:
     g.emit("/* expr not implemented */")
 

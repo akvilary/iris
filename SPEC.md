@@ -377,7 +377,7 @@ The compiler verifies all of this automatically.
 **Stack by default.** All primitives and objects are value types on the stack.
 No `ref object` — only `object`. Like Rust, not like Go or Java.
 
-**Heap only explicitly** — via `Pool` or heap-owning types (`Str`, `Seq`, etc.).
+**Heap only explicitly** — via `Pool`, `Heap[T]`, or heap-owning types (`Str`, `Seq`, etc.).
 
 #### Allocation table — every type, no exceptions
 
@@ -396,11 +396,12 @@ No `ref object` — only `object`. Like Rust, not like Go or Java.
 | `Seq[T]` | **Heap** | Unlimited | Like Rust's `Vec<T>`. Metadata on stack |
 | `HashTable[K,V]` | **Heap** | Unlimited | Like Rust's `HashMap`. Metadata on stack |
 | `HashSet[T]` | **Heap** | Unlimited | Like Rust's `HashSet`. Metadata on stack |
+| `Heap[T]` | **Heap** | Unlimited | Like Rust's `Box<T>`. Pointer (8 bytes) on stack |
 | `Pool` allocations | **Heap** | Unlimited | `pool.alloc(...)` — explicit arena heap |
 
-Heap types (`Str`, `Seq`, `HashTable`, `HashSet`) own their heap buffer
+Heap types (`Str`, `Seq`, `HashTable`, `HashSet`, `Heap[T]`) own their heap data
 and free it when they go out of scope. The metadata (pointer, length, capacity)
-lives on the stack — only the buffer is in heap. This is explicit:
+lives on the stack — only the data is in heap. This is explicit:
 **you choose a heap type, you know it allocates.**
 
 ```
@@ -411,14 +412,31 @@ lives on the stack — only the buffer is in heap. This is explicit:
 @arr array[int, 100] = [0; 100]      # 800 bytes stack
 
 # Heap — explicit, you chose a heap type
-@buf mut Str = ~""        # buffer in heap
-@list mut Seq[int] = ~[]    # buffer in heap
-@map mut HashTable[Str, int] = {}     # buffer in heap
+@buf mut Str = ~""                            # buffer in heap
+@list mut Seq[int] = ~[]                      # buffer in heap
+@map mut HashTable[Str, int] = ~{}            # buffer in heap
+@ids HashSet[int] = ~{1, 2, 3}               # buffer in heap
+@user Heap[User] = ~User(name=~"Andrey")      # object in heap
 
 # Heap via Pool — explicit arena allocation
 @pool = newPool()
 @node = pool.alloc(HugeNode(...))     # data in pool's heap arena
 ```
+
+#### `~` prefix — heap literal syntax
+
+`~` before a literal or constructor = heap allocation. Unified syntax:
+
+| Expression | Type | Where |
+|------------|------|-------|
+| `"hello"` | `view[Str]` | Stack — immutable view |
+| `~"hello"` | `Str` | Heap — owned string |
+| `[1, 2, 3]` | `array[int, 3]` | Stack — fixed array |
+| `~[1, 2, 3]` | `Seq[int]` | Heap — dynamic sequence |
+| `~{~"k": 1}` | `HashTable[Str, int]` | Heap — hash table |
+| `~{1, 2, 3}` | `HashSet[int]` | Heap — hash set |
+| `User(...)` | `User` | Stack — object |
+| `~User(...)` | `Heap[User]` | Heap — boxed object |
 
 No `&` in the language. All function parameters are passed by reference
 automatically — the compiler handles it (see Parameter passing).
@@ -452,6 +470,9 @@ The borrow checker ensures:
 - Immutable refs: multiple allowed simultaneously
 - Mutable ref: only one at a time, no other refs
 - Ownership: value moved, caller loses access
+
+`Heap[T]` auto-derefs to `T` — functions accepting `T` also accept
+`Heap[T]` without any changes to the signature (see Heap[T] section).
 
 #### Regular code — just write code, everything is automatic
 
@@ -502,6 +523,106 @@ No annotations needed. Compiler applies simple rules:
 
 No function body analysis needed. Fast compilation. Separate module compilation.
 May reject rare valid code — but never allows a bug.
+
+### Heap[T] — single heap allocation
+
+`Heap[T]` puts a single object on the heap. Like Rust's `Box<T>`.
+Created with `~` prefix before a constructor. Freed at scope end.
+
+```
+# Stack — default
+@user = User(name=~"Andrey", age=25)          # User on stack
+
+# Heap — explicit ~
+@user = ~User(name=~"Andrey", age=25)         # Heap[User], object on heap
+*echo(user.name)                               # auto-deref, works like stack
+```
+
+Memory layout:
+
+```
+Heap[User] (8 bytes on stack):
+┌──────────────┐
+│   User*      │
+│  (8 bytes)   │
+└──────┬───────┘
+       │
+       ▼
+  heap-allocated User (owned, freed at scope end)
+```
+
+Primary use case — **heterogeneous collections** (elements of different sizes
+behind a uniform pointer):
+
+```
+@Drawable concept:
+  @draw func(@self)
+
+# Circle (8 bytes) and Rect (16 bytes) — different sizes.
+# Heap[Drawable] is always 8 bytes (pointer), so Seq can store both:
+@shapes Seq[Heap[Drawable]] = ~[~Circle(r=5), ~Rect(w=3, h=4)]
+
+for @shape in shapes:
+  shape.draw()                # auto-deref, calls correct draw()
+```
+
+`Heap[T]` auto-converts to `view[T]` (zero-cost, like `Str` → `view[Str]`).
+
+#### Heap[T] and function parameters
+
+`Heap[T]` auto-derefs to `T` in function parameters. No need to write
+`Heap[T]` in function signatures — just use `T`:
+
+| Parameter | Stack `T` | `Heap[T]` |
+|-----------|-----------|-----------|
+| `@x T` | immutable ref | auto-deref, immutable ref |
+| `@x mut T` | mutable ref | auto-deref, mutable ref |
+| `@x own T` | move | ownership transfer, freed at scope end |
+
+```
+@greet func(@user User):
+  *echo(user.name)
+
+@stack = User(name=~"Alice", age=30)
+@heap = ~User(name=~"Bob", age=25)
+
+greet(stack)    # OK — ref to stack object
+greet(heap)     # OK — auto-deref Heap[User] → User
+
+@consume func(@user own User):
+  *echo(user.name)
+# user freed at scope end (stack: destroyed, heap: free)
+
+consume(stack)  # move stack value
+consume(heap)   # ownership of heap transferred, freed at scope end
+```
+
+`Heap[T]` in type annotations is only needed for:
+- **Variable annotation** (optional): `@user Heap[User] = ~User(...)`
+- **Heterogeneous collections**: `Seq[Heap[Drawable]]`
+
+#### Stack size warning
+
+Compiler warns when a stack-allocated object exceeds **4 KB (4096 bytes)**:
+
+```
+warning: type HugeBuffer (12288 bytes) is large for stack allocation
+  --> app.is:15
+  hint: consider using Heap[HugeBuffer] via ~HugeBuffer(...)
+```
+
+Suppress with `![allowStack]` when stack allocation is intentional:
+
+```
+@buf = ![allowStack] HugeBuffer(size=100_000)
+```
+
+Configurable in `iris.toml`:
+
+```toml
+[warnings]
+stackSizeLimit = 4096    # bytes, default
+```
 
 ### Pool — heap allocation
 
@@ -638,14 +759,14 @@ sum(dynamic)    # OK — view into Seq
 
 ### HashTable
 
-Inline hash table literal with `{key: value}`:
+Inline hash table literal with `~{key: value}`:
 
 ```
 # Create hash table:
-@headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
+@headers = ~{~"Content-Type": ~"json", ~"Authorization": ~"Bearer xxx"}
 
-# Type: HashTable[Str, Str]
-@scores: HashTable[Str, int] = {"alice": 100, "bob": 85}
+# Type: HashTable[Str, int]
+@scores: HashTable[Str, int] = ~{~"alice": 100, ~"bob": 85}
 
 # Access:
 *echo(headers["Content-Type"])
@@ -656,14 +777,14 @@ Inline hash table literal with `{key: value}`:
 
 ### HashSet
 
-Inline hash set literal with `{values}`:
+Inline hash set literal with `~{values}`:
 
 ```
-@ids = {1, 2, 3, 4}
+@ids = ~{1, 2, 3, 4}
 # Type: HashSet[int]
 
-@names = {"Alice", "Bob", "Charlie"}
-# names of HashSet[Str]
+@names = ~{~"Alice", ~"Bob", ~"Charlie"}
+# Type: HashSet[Str]
 
 if 2 in ids:
   *echo("found")
@@ -672,7 +793,7 @@ if 2 in ids:
 @empty = HashSet[int]()
 ```
 
-Compiler distinguishes by syntax: `{k: v}` → HashTable, `{v}` → HashSet.
+Compiler distinguishes by syntax: `~{k: v}` → HashTable, `~{v}` → HashSet.
 
 ### Tuples
 
@@ -703,27 +824,6 @@ Named and unnamed tuples for lightweight data grouping:
 @r = divide(10, 3)
 *echo(r.quotient)            # 3
 *echo(r.remainder)           # 1
-
-# or
-@divide! func[
-  (@a int, @b int),
-  (int, int)
-]:
-  result = (a / b, a % b)
-
-
-@divide! func[
-  (
-    @a int,
-    @b int,
-  ),
-  (
-    int,
-    int,
-  )
-]:
-  result = (a / b, a % b)
-
 
 # Destructuring
 (@q, @rem) = divide(10, 3)

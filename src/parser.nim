@@ -319,14 +319,59 @@ proc parsePrimary(P: var Parser): Expr =
           break
         else: break
       StrInterpExpr(parts: parts)
-    else:
-      P.expect(tkLBracket)
+    elif P.at(tkLBracket):
+      # ~[...] → SeqLitExpr
+      discard P.advance()
       var elems: seq[Expr]
       while not P.at(tkRBracket) and not P.at(tkEof):
         elems.add(P.parseExpr())
         if P.at(tkComma): discard P.advance()
       P.expect(tkRBracket)
       SeqLitExpr(elems: elems)
+    elif P.at(tkLBrace):
+      # ~{...} → HashTableLitExpr or HashSetLitExpr
+      discard P.advance()
+      if P.at(tkRBrace):
+        # ~{} → empty HashTable
+        discard P.advance()
+        HashTableLitExpr(entries: @[])
+      else:
+        # Parse first element, then check for colon to distinguish
+        let first = P.parseExpr()
+        if P.at(tkColon):
+          # ~{key: value, ...} → HashTableLitExpr
+          discard P.advance()
+          var entries: seq[HashTableEntry]
+          entries.add(HashTableEntry(key: first, value: P.parseExpr()))
+          while P.at(tkComma):
+            discard P.advance()
+            if P.at(tkRBrace): break
+            let k = P.parseExpr()
+            P.expect(tkColon)
+            entries.add(HashTableEntry(key: k, value: P.parseExpr()))
+          P.expect(tkRBrace)
+          HashTableLitExpr(entries: entries)
+        else:
+          # ~{value, ...} → HashSetLitExpr
+          var elems: seq[Expr]
+          elems.add(first)
+          while P.at(tkComma):
+            discard P.advance()
+            if P.at(tkRBrace): break
+            elems.add(P.parseExpr())
+          P.expect(tkRBrace)
+          HashSetLitExpr(elems: elems)
+    elif P.at(tkIdent):
+      # ~TypeName(...) → HeapAllocExpr
+      let t = P.advance()
+      let ident = IdentExpr(name: t.strVal)
+      P.expect(tkLParen)
+      let args = P.parseCallArgs()
+      P.expect(tkRParen)
+      HeapAllocExpr(inner: CallExpr(fn: ident, args: args))
+    else:
+      P.error("expected string, [, {, or type name after ~")
+      nil
   of tkSome, tkNone:
     let isSome = P.peek() == tkSome
     discard P.advance()
