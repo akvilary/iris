@@ -891,8 +891,16 @@ proc parseStmt*(P: var Parser): Stmt =
     ReturnStmt()
   of tkResult:
     discard P.advance()
-    P.expect(tkEq)
-    ResultAssignStmt(value: P.parseExpr())
+    if P.at(tkDot):
+      # result.field = value
+      discard P.advance()
+      let field = P.parseIdentName()
+      P.expect(tkEq)
+      ResultAssignStmt(field: field, value: P.parseExpr())
+    else:
+      # result = value
+      P.expect(tkEq)
+      ResultAssignStmt(value: P.parseExpr())
   of tkBlock:
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()

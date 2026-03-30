@@ -178,6 +178,7 @@ type
     value*: Expr
 
   ResultAssignStmt* = ref object of Stmt
+    field*: string  # empty = whole result, non-empty = result.field
     value*: Expr
 
   Param* = object

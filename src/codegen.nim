@@ -725,8 +725,18 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
 
   elif s of ResultAssignStmt:
-    let val = ResultAssignStmt(s).value
-    # Check if assigning an error type (result = Error(...))
+    let rs = ResultAssignStmt(s)
+    # result.field = value
+    if rs.field.len > 0:
+      g.emitIndent()
+      if g.inResultFunc:
+        g.emit("__result.value." & rs.field & " = ")
+      else:
+        g.emit("__result." & rs.field & " = ")
+      g.genExpr(rs.value); g.emit(";\n")
+      return
+    # result = Error(...)
+    let val = rs.value
     if g.inResultFunc and val of CallExpr and CallExpr(val).fn of IdentExpr:
       let name = IdentExpr(CallExpr(val).fn).name
       if name in g.errorNames:
@@ -737,6 +747,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         g.genExpr(val)
         g.emit(";\n")
         return
+    # result = value
     g.emitIndent()
     if g.inResultFunc:
       g.emit("__result.value = ")
