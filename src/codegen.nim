@@ -64,14 +64,16 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
     of "float", "float64": "double"
     of "float32": "float"
     of "bool": "bool"
-    of "str": "iris_str"
-    of "String": "iris_String"
+    of "Str": "iris_Str"
     of "natural": "uint64_t"
     of "rune": "int32_t"
     else: n
   elif t of GenericType:
     let gt = GenericType(t)
-    gt.name & "_" & gt.args.mapIt(g.typeToCStr(it)).join("_")
+    if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
+      "iris_view_" & NamedType(gt.args[0]).name
+    else:
+      gt.name & "_" & gt.args.mapIt(g.typeToCStr(it)).join("_")
   elif t of TupleType:
     "/* tuple type */"
   else:
@@ -103,7 +105,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
     let ct = g.varCType(IdentExpr(e).name)
     case ct
     of "const char*": return ("%s", false)
-    of "iris_str", "iris_String": return ("%.*s", false)
+    of "iris_view_Str", "iris_Str": return ("%.*s", false)
     of "bool": return ("%s", false)
     of "double", "float": return ("%g", false)
     else: return ("%lld", true)
@@ -118,7 +120,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
             case f.ctype
             of "double", "float": return ("%g", false)
             of "const char*": return ("%s", false)
-            of "iris_str", "iris_String": return ("%.*s", false)
+            of "iris_view_Str", "iris_Str": return ("%.*s", false)
             of "bool": return ("%s", false)
             else: return ("%lld", true)
   return ("%lld", true)
@@ -126,7 +128,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
 proc inferCType(g: CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
-  if e of StringLitExpr or e of StringInterpExpr: return "iris_str"
+  if e of StringLitExpr or e of StringInterpExpr: return "iris_view_Str"
   if e of BoolLitExpr: return "bool"
   if e of RuneLitExpr: return "int32_t"
   if e of BinaryExpr:
@@ -176,7 +178,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     let ct = g.varCType(name)
     if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-    elif ct == "iris_str": g.emit("(int)" & name & ".len, " & name & ".data")
+    elif ct == "iris_view_Str": g.emit("(int)" & name & ".len, " & name & ".data")
     else: g.genExpr(e)
   elif e of DollarExpr:
     let inner = DollarExpr(e).expr
@@ -184,7 +186,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
       let name = IdentExpr(inner).name
       let ct = g.varCType(name)
       if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-      elif ct == "iris_str": g.emit("(int)" & name & ".len, " & name & ".data")
+      elif ct == "iris_view_Str": g.emit("(int)" & name & ".len, " & name & ".data")
       elif ct == "const char*": g.emit(name)
       else:
         for en in g.enumNames:
@@ -232,7 +234,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
   if e of IntLitExpr: g.emit($IntLitExpr(e).val)
   elif e of FloatLitExpr: g.emit($FloatLitExpr(e).val)
   elif e of StringLitExpr:
-    g.emit("iris_str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
+    g.emit("iris_view_Str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
   elif e of BoolLitExpr:
     g.emit(if BoolLitExpr(e).val: "true" else: "false")
   elif e of RuneLitExpr:
@@ -810,17 +812,17 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("#include <stdbool.h>\n")
   g.emit("#include <string.h>\n")
   g.emit("#include <stdlib.h>\n\n")
-  g.emit("// str — immutable view (pointer + length), like Rust's &str\n")
-  g.emit("typedef struct { const char* data; size_t len; } iris_str;\n")
-  g.emit("static inline iris_str iris_str_from(const char* s) {\n")
-  g.emit("  return (iris_str){s, strlen(s)};\n")
+  g.emit("// view[Str] — immutable view (pointer + length)\n")
+  g.emit("typedef struct { const char* data; size_t len; } iris_view_Str;\n")
+  g.emit("static inline iris_view_Str iris_view_Str_from(const char* s) {\n")
+  g.emit("  return (iris_view_Str){s, strlen(s)};\n")
   g.emit("}\n\n")
-  g.emit("// String — owned heap buffer (pointer + length + capacity), like Rust's String\n")
-  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_String;\n\n")
+  g.emit("// Str — owned heap buffer (pointer + length + capacity)\n")
+  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_Str;\n\n")
 
   # Common Option types
   g.emit("// Option types\n")
-  for t in ["int64_t", "double", "bool", "iris_str"]:
+  for t in ["int64_t", "double", "bool", "iris_view_Str"]:
     let optName = "iris_Option_" & t
     g.emit("typedef struct { bool has; " & t & " value; } " & optName & ";\n")
     g.okTypes.add(optName)

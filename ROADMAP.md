@@ -6,7 +6,7 @@ Minimal compiler that can compile basic Iris programs to C.
 
 - [x] Lexer (tokenization, string interpolation)
 - [x] Parser (indentation-based, AST construction)
-- [x] Basic types: int, float, bool, str, rune
+- [x] Basic types: int, float, bool, rune
 - [x] Variables: @x, @x mut, @x const
 - [x] Functions: func, result, return
 - [x] Control flow: if/elif/else, while, for, break, continue
@@ -42,9 +42,8 @@ Minimal compiler that can compile basic Iris programs to C.
 
 - [ ] array[T, N] (stack)
 - [ ] Seq[T] (heap), `~[...]` literal
-- [ ] slice[T] (view)
-- [x] str (stack, 256 bytes, immutable, iris_str struct)
-- [ ] String (heap, mutable builder)
+- [x] view[T] (immutable view, pointer + length)
+- [ ] Str (heap, mutable builder)
 
 ### Phase 5 — Concurrency
 
