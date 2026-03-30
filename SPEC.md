@@ -1678,7 +1678,20 @@ Concurrency is achieved via `block spawn`, not async/await:
 Each `spawn` body is compiled as a separate function and executed in a thread pool
 (number of threads = number of CPU cores). Thousands of spawns can be queued.
 Blocking IO inside spawn blocks only that pool thread, not the program.
-No runtime needed — just C code with pthreads under the hood.
+
+### Zero-cost when unused
+
+The concurrency runtime (thread pool, futures, channels) is **not linked** into
+programs that don't use it. The compiler detects presence of `spawn` or `detach`
+in the AST during codegen:
+
+- **No `spawn`/`detach`** → pure C output, no runtime, no pthreads, minimal binary
+- **Has `spawn`/`detach`** → codegen emits `#include "iris_runtime.h"` and links
+  the runtime automatically (thread pool init/shutdown in main, futures for detach)
+
+The programmer never opts in manually — the compiler decides based on what the code
+actually uses. A hello-world stays a tiny static binary; a concurrent server gets
+the runtime it needs.
 
 ## Error Handling
 
