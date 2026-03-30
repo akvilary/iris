@@ -413,7 +413,7 @@ lives on the stack — only the buffer is in heap. This is explicit:
 # Heap — explicit, you chose a heap type
 @buf mut Str = Str()        # buffer in heap
 @list mut Seq[int] = Seq[int]()   # buffer in heap
-@map mut HashTable[view[Str], int] = {}     # buffer in heap
+@map mut HashTable[Str, int] = {}     # buffer in heap
 
 # Heap via Pool — explicit arena allocation
 @pool = newPool()
@@ -644,14 +644,14 @@ Inline hash table literal with `{key: value}`:
 # Create hash table:
 @headers = {"Content-Type": "json", "Authorization": "Bearer xxx"}
 
-# Type: HashTable[view[Str], view[Str]]
-@scores: HashTable[view[Str], int] = {"alice": 100, "bob": 85}
+# Type: HashTable[Str, Str]
+@scores: HashTable[Str, int] = {"alice": 100, "bob": 85}
 
 # Access:
 *echo(headers["Content-Type"])
 
 # Empty:
-@empty = HashTable[view[Str], int]()
+@empty = HashTable[Str, int]()
 ```
 
 ### HashSet
@@ -663,7 +663,7 @@ Inline hash set literal with `{values}`:
 # Type: HashSet[int]
 
 @names = {"Alice", "Bob", "Charlie"}
-# names of HashSet[view[Str]]
+# names of HashSet[Str]
 
 if 2 in ids:
   *echo("found")
