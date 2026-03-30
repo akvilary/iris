@@ -1,7 +1,7 @@
 # Error handling with ok / raise
 
 @DivError! object:
-  @message view[Str]
+  @message view[Str]  # TODO: change to Str when Str runtime is implemented
 
 @divide! func(@a int, @b int) ok int else DivError:
   if b == 0:

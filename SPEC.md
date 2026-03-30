@@ -195,12 +195,12 @@ This allows using reserved words as field/variant names.
 
 ```
 @User! object:
-  @name! view[Str]
+  @name! Str
   @age! int
 
 @Admin! object of User:
-  @for view[Str]            # reserved word — OK with @
-  @type view[Str]           # reserved word — OK with @
+  @for Str            # reserved word — OK with @
+  @type Str           # reserved word — OK with @
   @data int
 
 @Status! enum:
@@ -233,9 +233,9 @@ Public visibility via `!` after the name:
   result = helperFunc(x)
 
 @Config! object:
-  @host! view[Str]         # public field
+  @host! Str         # public field
   @port! int            # public field
-  @secret view[Str]        # private field
+  @secret Str        # private field
 
 @maxRetries! const = 3
 ```
@@ -823,6 +823,25 @@ Two string types — explicit about where data lives:
 - Concatenation: `view[Str] + view[Str]` → `Str`, `Str + view[Str]` → `Str`.
 - Interpolation: `"hello {name}"` — built into lexer, works everywhere.
 
+#### Where `view[T]` can be used
+
+`view[T]` does not own data — it only borrows. To keep lifetime inference simple
+(3 rules, no annotations), `view[T]` is restricted to:
+
+| Allowed | Example |
+|---------|---------|
+| Function parameters | `@greet func(@s view[Str])` |
+| Local variables | `@name view[Str] = "hello"` |
+| Function return values | `@first func(@s view[Str]) ok view[Str]` |
+
+| **Not allowed** | **Use instead** |
+|-----------------|-----------------|
+| Object fields | `Str`, `Seq[T]` (owning types) |
+| Closure captures | capture `Str`, not `view[Str]` |
+
+This is a deliberate trade-off: no lifetime annotations ever, at the cost of
+occasional `.clone()` when moving data into structs or closures.
+
 #### Memory layout
 
 ```
@@ -1108,7 +1127,7 @@ A type automatically satisfies a concept if it has the required methods:
 
 ```
 @User object:
-  @name view[Str]
+  @name Str
   @age int
 
 @toString func(@self User) ok view[Str]:
@@ -1549,15 +1568,15 @@ Error types are regular objects:
 
 ```
 @DivError! object:
-  @message view[Str]
+  @message Str
 
 @IoError! object:
-  @path view[Str]
-  @message view[Str]
+  @path Str
+  @message Str
 
 @ParseError! object:
   @line int
-  @message view[Str]
+  @message Str
 ```
 
 ### Returning errors (function author)
