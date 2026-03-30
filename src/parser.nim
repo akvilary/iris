@@ -555,12 +555,17 @@ proc parseDecl(P: var Parser): Stmt =
     DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
   of tkFunc:
     discard P.advance()
-    # Optional generic params: func[T, U](...)
-    var genericParams: seq[string]
+    # Optional generic params: func[T, U: Concept](...)
+    var genericParams: seq[GenericParam]
     if P.at(tkLBracket):
       discard P.advance()
       while not P.at(tkRBracket) and not P.at(tkEof):
-        genericParams.add(P.parseIdentName())
+        let gpName = P.parseIdentName()
+        var constraint = ""
+        if P.at(tkColon):
+          discard P.advance()
+          constraint = P.parseIdentName()
+        genericParams.add(GenericParam(name: gpName, constraint: constraint))
         if P.at(tkComma): discard P.advance()
       P.expect(tkRBracket)
     P.expect(tkLParen)
@@ -737,6 +742,37 @@ proc parseDecl(P: var Parser): Stmt =
       if P.at(tkDedent): discard P.advance()
     ErrorDeclStmt(name: at.name, public: at.public,
                   fields: fields, variant: variant)
+  of tkConcept:
+    discard P.advance()
+    P.expect(tkColon)
+    P.skipNewlines()
+    var methods: seq[ConceptMethod]
+    if P.at(tkIndent):
+      discard P.advance()
+      while not P.at(tkDedent) and not P.at(tkEof):
+        P.skipNewlines()
+        if P.at(tkDedent): break
+        # @methodName func(@self, ...) ok ReturnType
+        let mat = P.parseAtName()
+        P.expect(tkFunc)
+        P.expect(tkLParen)
+        var params: seq[Param]
+        while not P.at(tkRParen) and not P.at(tkEof):
+          let pname = P.parseAtIdent()
+          var typeAnn: TypeExpr = nil
+          if not P.at(tkComma) and not P.at(tkRParen):
+            typeAnn = P.parseType()
+          params.add(Param(name: pname, modifier: paramDefault, typeAnn: typeAnn))
+          if P.at(tkComma): discard P.advance()
+        P.expect(tkRParen)
+        var retType: TypeExpr = nil
+        if P.at(tkOk):
+          discard P.advance()
+          retType = P.parseType()
+        methods.add(ConceptMethod(name: mat.name, params: params, returnType: retType))
+        P.skipNewlines()
+      if P.at(tkDedent): discard P.advance()
+    ConceptDeclStmt(name: at.name, public: at.public, methods: methods)
   of tkTuple:
     discard P.advance()
     let fields = P.parseFieldsBlock()

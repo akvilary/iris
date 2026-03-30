@@ -31,6 +31,8 @@ type
     modulePublicNames*: Table[string, seq[string]]  # module -> list of public names
     nameAliases*: Table[string, string]  # local name -> C name (from imports)
     genericFuncs*: Table[string, FnDeclStmt]  # generic func name -> AST
+    concepts*: Table[string, ConceptDeclStmt]  # concept name -> definition
+    typeMethods*: Table[string, seq[tuple[name: string, paramTypes: seq[string], retType: string]]]
     emittedSpecializations*: seq[string]  # already emitted specializations
     pendingSpecializations*: string  # code to emit before main
 
@@ -86,6 +88,11 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
 proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
 
+proc isGenericParam(params: seq[GenericParam], name: string): bool =
+  for p in params:
+    if p.name == name: return true
+  return false
+
 proc substituteType(t: TypeExpr, subs: Table[string, string]): TypeExpr =
   ## Replace generic type params with concrete types
   if t == nil: return nil
@@ -115,6 +122,8 @@ proc formatParams*(g: CodeGen, params: seq[Param]): string =
   if params.len == 0: return "void"
   params.mapIt(g.typeToCStr(it.typeAnn) & " " & it.name).join(", ")
 
+proc inferCType(g: CodeGen, e: Expr): string
+
 proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   if e of StringLitExpr or e of StringInterpExpr: return ("%s", false)
   if e of FloatLitExpr: return ("%g", false)
@@ -142,7 +151,13 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
             of "iris_view_Str", "iris_Str": return ("%.*s", false)
             of "bool": return ("%s", false)
             else: return ("%lld", true)
-  return ("%lld", true)
+  # Fallback — use inferCType for any expression (including CallExpr)
+  let ct = g.inferCType(e)
+  case ct
+  of "iris_view_Str", "iris_Str": return ("%.*s", false)
+  of "bool": return ("%s", false)
+  of "double", "float": return ("%g", false)
+  else: return ("%lld", true)
 
 proc inferCType(g: CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
@@ -186,7 +201,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
             let ct = g.inferCType(c.args[i].value)
             if param.typeAnn of NamedType:
               let tn = NamedType(param.typeAnn).name
-              if tn in gf.genericParams:
+              if gf.genericParams.isGenericParam(tn):
                 subs[tn] = ct
         if gf.returnType != nil:
           let specRet = substituteType(gf.returnType, subs)
@@ -239,7 +254,11 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     else:
       g.genExpr(inner)
   else:
-    g.genExpr(e)
+    let ct = g.inferCType(e)
+    if ct == "bool":
+      g.emit("("); g.genExpr(e); g.emit(" ? \"true\" : \"false\")")
+    else:
+      g.genExpr(e)
 
 proc genEcho(g: var CodeGen, args: seq[CallArg]) =
   if args.len == 0:
@@ -269,11 +288,19 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
       g.genEchoArg(ex)
     g.emit(")")
   else:
-    let (fmt, needsCast) = g.printfFormat(e)
-    g.emit("printf(\"" & fmt & "\\n\", ")
-    if needsCast: g.emit("(long long)")
-    g.genEchoArg(e)
-    g.emit(")")
+    let ct = g.inferCType(e)
+    # Non-trivial expression returning string — use temp variable
+    # (IdentExpr is handled in genEchoArg, literals handled above)
+    if ct in ["iris_view_Str", "iris_Str"] and not (e of IdentExpr):
+      g.emit("{ " & ct & " __echo_tmp = ")
+      g.genExpr(e)
+      g.emit("; printf(\"%.*s\\n\", (int)__echo_tmp.len, __echo_tmp.data); }")
+    else:
+      let (fmt, needsCast) = g.printfFormat(e)
+      g.emit("printf(\"" & fmt & "\\n\", ")
+      if needsCast: g.emit("(long long)")
+      g.genEchoArg(e)
+      g.emit(")")
 
 proc genExpr(g: var CodeGen, e: Expr) =
   if e of IntLitExpr: g.emit($IntLitExpr(e).val)
@@ -418,21 +445,57 @@ proc genExpr(g: var CodeGen, e: Expr) =
             # Match param type against generic params
             if param.typeAnn of NamedType:
               let tn = NamedType(param.typeAnn).name
-              if tn in gf.genericParams:
+              if gf.genericParams.isGenericParam(tn):
                 subs[tn] = concreteType
             elif param.typeAnn of GenericType:
               let gt = GenericType(param.typeAnn)
               # view[T] → extract inner type
               if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
                 let inner = NamedType(gt.args[0]).name
-                if inner in gf.genericParams:
+                if gf.genericParams.isGenericParam(inner):
                   # concreteType is iris_view_X → extract X
                   if concreteType.startsWith("iris_view_"):
                     subs[inner] = concreteType[10..^1]
                   else:
                     subs[inner] = concreteType
+        # Validate concept constraints
+        for gp in gf.genericParams:
+          if gp.constraint.len > 0 and gp.name in subs:
+            let concreteType = subs[gp.name]
+            if gp.constraint in g.concepts:
+              let cdef = g.concepts[gp.constraint]
+              let methods = g.typeMethods.getOrDefault(concreteType, @[])
+              for m in cdef.methods:
+                # Build expected param types: @self/nil → concreteType, Self → concreteType
+                var expectedParams: seq[string]
+                for p in m.params:
+                  if p.typeAnn == nil:
+                    expectedParams.add(concreteType)  # @self
+                  elif p.typeAnn of NamedType and NamedType(p.typeAnn).name == "Self":
+                    expectedParams.add(concreteType)  # Self → concrete type
+                  else:
+                    expectedParams.add(g.typeToCStr(p.typeAnn))
+                let expectedRet = if m.returnType != nil: g.typeToCStr(m.returnType) else: "void"
+                var found = false
+                for tm in methods:
+                  if tm.name == m.name and tm.paramTypes == expectedParams and tm.retType == expectedRet:
+                    found = true
+                    break
+                if not found:
+                  var sig = m.name & "("
+                  for i, p in m.params:
+                    if i > 0: sig.add(", ")
+                    sig.add("@" & p.name)
+                    if p.typeAnn == nil: sig.add(" " & concreteType)
+                    elif p.typeAnn of NamedType and NamedType(p.typeAnn).name == "Self": sig.add(" " & concreteType)
+                    elif p.typeAnn != nil: sig.add(" " & g.typeToCStr(p.typeAnn))
+                  sig.add(")")
+                  if m.returnType != nil: sig.add(" ok " & g.typeToCStr(m.returnType))
+                  raise newException(ValueError,
+                    "error: type '" & concreteType & "' does not satisfy concept '" &
+                    gp.constraint & "'\n  missing: " & sig)
         # Build specialized name
-        let specName = name & "_" & gf.genericParams.mapIt(subs.getOrDefault(it, "unknown")).join("_")
+        let specName = name & "_" & gf.genericParams.mapIt(subs.getOrDefault(it.name, "unknown")).join("_")
         # Emit specialization if not yet emitted
         if specName notin g.emittedSpecializations:
           g.emittedSpecializations.add(specName)
@@ -687,6 +750,18 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if f.genericParams.len > 0:
       g.genericFuncs[f.name] = f
       return
+    # Track methods: func(@self TypeName) → register as method of TypeName
+    if f.params.len > 0 and f.params[0].name == "self" and f.params[0].typeAnn != nil:
+      if f.params[0].typeAnn of NamedType:
+        let typeName = NamedType(f.params[0].typeAnn).name
+        let retType = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
+        var paramTypes: seq[string]
+        for p in f.params:
+          if p.typeAnn != nil: paramTypes.add(g.typeToCStr(p.typeAnn))
+          else: paramTypes.add(typeName)  # @self without type → the type itself
+        if typeName notin g.typeMethods:
+          g.typeMethods[typeName] = @[]
+        g.typeMethods[typeName].add((name: f.name, paramTypes: paramTypes, retType: retType))
     let hasReturn = f.returnType != nil
     let hasErrors = f.errorTypes.len > 0
 
@@ -889,6 +964,11 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         for f in b.fields:
           vi.fields.add(VariantFieldInfo(fieldName: f.name, branchValues: b.values))
       g.variantInfo[e.name] = vi
+
+  elif s of ConceptDeclStmt:
+    # Concepts are compile-time only — store for validation, no C output
+    let c = ConceptDeclStmt(s)
+    g.concepts[c.name] = c
 
   elif s of EnumDeclStmt:
     let en = EnumDeclStmt(s)
@@ -1112,7 +1192,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
 
   # Types first
   for s in stmts:
-    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
+    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt:
       g.genStmt(s); g.emit("\n")
 
   # Result structs + forward declarations (skip generics — monomorphized later)
@@ -1150,7 +1230,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   for s in stmts:
     if s of FnDeclStmt:
       g.genStmt(s); g.emit("\n")
-    elif not (s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt):
+    elif not (s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt):
       topLevel.add(s)
 
   # Top-level code → main
@@ -1181,7 +1261,7 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
 
   # Types
   for s in stmts:
-    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
+    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt:
       g.genStmt(s); g.emit("\n")
 
   # Forward declarations + result structs

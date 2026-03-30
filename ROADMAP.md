@@ -25,8 +25,8 @@ Minimal compiler that can compile basic Iris programs to C.
 - [x] Result: ok T else Error (if/else, case, .get())
 - [x] case/of with exhaustiveness checking
 - [x] Tuples (named + unnamed, block + inline)
-- [ ] Generics (duck typing at instantiation)
-- [ ] Concepts (optional named constraints)
+- [x] Generics (duck typing at instantiation, monomorphization)
+- [x] Concepts (optional named constraints, compile-time validation)
 - [x] `$` operator for string conversion (partial)
 - [ ] Destructuring
 

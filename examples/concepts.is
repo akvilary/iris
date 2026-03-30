@@ -1,0 +1,19 @@
+# Concepts demo
+
+@Printable concept:
+  @toString func(@self) ok view[Str]
+
+@User object:
+  @name Str
+  @age int
+
+# User satisfies Printable — has toString
+@toString func(@self User) ok view[Str]:
+  result = "user"
+
+# Generic with concept constraint
+@print func[T: Printable](@item T):
+  *echo(toString(item))
+
+@u = User(name=~"Alice", age=30)
+print(u)

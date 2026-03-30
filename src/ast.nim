@@ -185,10 +185,14 @@ type
     modifier*: ParamModifier
     typeAnn*: TypeExpr
 
+  GenericParam* = object
+    name*: string
+    constraint*: string  # concept name, empty = unconstrained
+
   FnDeclStmt* = ref object of Stmt
     name*: string
     public*: bool
-    genericParams*: seq[string]  # [T, U] — empty if not generic
+    genericParams*: seq[GenericParam]  # [T, U: Concept] — empty if not generic
     params*: seq[Param]
     returnType*: TypeExpr  # nil = void
     errorTypes*: seq[TypeExpr]  # !Error1, !Error2
@@ -268,6 +272,16 @@ type
     name*: string
     public*: bool
     fields*: seq[TypeField]
+
+  ConceptMethod* = object
+    name*: string
+    params*: seq[Param]        # @self, @other Self, etc.
+    returnType*: TypeExpr
+
+  ConceptDeclStmt* = ref object of Stmt
+    name*: string
+    public*: bool
+    methods*: seq[ConceptMethod]
 
   CasePattern* = object
     kind*: CasePatternKind
