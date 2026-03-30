@@ -21,13 +21,13 @@ type
     tkWhile, tkFor, tkIn
     tkBreak, tkContinue, tkReturn, tkResult
     tkBlock, tkSpawn, tkDetach
-    tkObject, tkEnum, tkTuple, tkConcept
+    tkObject, tkEnum, tkTuple, tkConcept, tkError
     tkImport, tkFrom, tkExport
     tkWhen, tkIsMain
     tkCase, tkOf, tkDiscard
     tkNot, tkAnd, tkOr
     tkSome, tkNone, tkOk
-    tkRaise, tkQuit, tkOwn
+    tkQuit, tkOwn
     tkTemplate, tkMacro, tkAfter
     tkShl, tkShr, tkXor
 
@@ -119,13 +119,13 @@ let keywords* = {
   "result": tkResult,
   "block": tkBlock, "spawn": tkSpawn, "detach": tkDetach,
   "object": tkObject, "enum": tkEnum, "tuple": tkTuple,
-  "concept": tkConcept,
+  "concept": tkConcept, "error": tkError,
   "import": tkImport, "from": tkFrom, "export": tkExport,
   "when": tkWhen, "isMain": tkIsMain,
   "case": tkCase, "of": tkOf, "discard": tkDiscard,
   "not": tkNot, "and": tkAnd, "or": tkOr,
   "some": tkSome, "none": tkNone, "ok": tkOk,
-  "raise": tkRaise, "quit": tkQuit, "own": tkOwn,
+  "quit": tkQuit, "own": tkOwn,
   "template": tkTemplate, "macro": tkMacro, "after": tkAfter,
   "shl": tkShl, "shr": tkShr, "xor": tkXor,
 }.toTable

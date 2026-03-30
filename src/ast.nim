@@ -244,6 +244,12 @@ type
     fields*: seq[TypeField]
     variant*: ObjectVariant  # empty tagName = no variant
 
+  ErrorDeclStmt* = ref object of Stmt
+    name*: string
+    public*: bool
+    fields*: seq[TypeField]
+    variant*: ObjectVariant  # empty tagName = no variant
+
   EnumVariant* = object
     name*: string
     valueKind*: EnumValueKind
@@ -286,9 +292,6 @@ type
 
   SpawnStmt* = ref object of Stmt
     body*: seq[Stmt]
-
-  RaiseStmt* = ref object of Stmt
-    expr*: Expr
 
   QuitStmt* = ref object of Stmt
     expr*: Expr  # nil = no arg

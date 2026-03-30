@@ -615,6 +615,64 @@ proc parseDecl(P: var Parser): Stmt =
         P.skipNewlines()
       if P.at(tkDedent): discard P.advance()
     EnumDeclStmt(name: at.name, public: at.public, variants: variants)
+  of tkError:
+    discard P.advance()
+    P.expect(tkColon)
+    P.skipNewlines()
+    var fields: seq[TypeField]
+    var variant: ObjectVariant
+    if P.at(tkIndent):
+      discard P.advance()
+      while not P.at(tkDedent) and not P.at(tkEof):
+        P.skipNewlines()
+        if P.at(tkDedent): break
+        if P.at(tkCase):
+          # case @kind EnumType: (same as object)
+          discard P.advance()
+          let tagName = P.parseAtIdent()
+          let tagType = P.parseIdentName()
+          P.expect(tkColon)
+          P.skipNewlines()
+          var branches: seq[VariantBranch]
+          if P.at(tkIndent):
+            discard P.advance()
+            while not P.at(tkDedent) and not P.at(tkEof):
+              P.skipNewlines()
+              if P.at(tkDedent): break
+              P.expect(tkOf)
+              var values: seq[string]
+              values.add(P.parseIdentName())
+              while P.at(tkComma):
+                discard P.advance()
+                values.add(P.parseIdentName())
+              P.expect(tkColon)
+              P.skipNewlines()
+              var branchFields: seq[TypeField]
+              if P.at(tkIndent):
+                discard P.advance()
+                while not P.at(tkDedent) and not P.at(tkEof):
+                  P.skipNewlines()
+                  if P.at(tkDedent): break
+                  if P.at(tkDiscard):
+                    discard P.advance()
+                  else:
+                    let fat = P.parseAtName()
+                    let typeAnn = P.parseType()
+                    branchFields.add(TypeField(name: fat.name, public: fat.public, typeAnn: typeAnn))
+                  P.skipNewlines()
+                if P.at(tkDedent): discard P.advance()
+              branches.add(VariantBranch(values: values, fields: branchFields))
+              P.skipNewlines()
+            if P.at(tkDedent): discard P.advance()
+          variant = ObjectVariant(tagName: tagName, tagType: tagType, branches: branches)
+        else:
+          let fat = P.parseAtName()
+          let typeAnn = P.parseType()
+          fields.add(TypeField(name: fat.name, public: fat.public, typeAnn: typeAnn))
+        P.skipNewlines()
+      if P.at(tkDedent): discard P.advance()
+    ErrorDeclStmt(name: at.name, public: at.public,
+                  fields: fields, variant: variant)
   of tkTuple:
     discard P.advance()
     let fields = P.parseFieldsBlock()
@@ -645,7 +703,7 @@ proc parseDecl(P: var Parser): Stmt =
     P.expect(tkColon); P.skipNewlines()
     BlockStmt(label: at.name, body: P.parseBlockBody())
   else:
-    P.error("expected =, mut, const, func, object, enum, while, for, or block after @name")
+    P.error("expected =, mut, const, func, object, error, enum, while, for, or block after @name")
     nil
 
 proc parseDoElse(P: var Parser): Stmt =
@@ -785,9 +843,6 @@ proc parseStmt*(P: var Parser): Stmt =
       discard P.advance()
       names.add(P.parseIdentName())
     FromImportStmt(module: module, names: names)
-  of tkRaise:
-    discard P.advance()
-    RaiseStmt(expr: P.parseExpr())
   of tkQuit:
     discard P.advance()
     var arg: Expr = nil

@@ -1,0 +1,34 @@
+# Error types demo
+
+# Simple error
+@DivError! error:
+  @message Str
+
+# Grouped error with variants
+@HttpErrorKind! enum:
+  @notFound, @serverError, @timeout
+
+@HttpError! error:
+  @message Str
+  case @kind HttpErrorKind:
+    of notFound:
+      @path Str
+    of serverError:
+      @code int
+    of timeout:
+      discard
+
+# Function that raises
+@divide! func(@a int, @b int) ok int else DivError:
+  if b == 0:
+    result = DivError(message=~"division by zero")
+    return
+  result = a / b
+
+# Usage
+do @r = divide(10, 0) else:
+  *echo("error caught")
+
+do @r = divide(10, 2) else:
+  *echo("should not happen")
+*echo(r.get())

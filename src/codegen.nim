@@ -19,6 +19,7 @@ type
     varTypes: Table[string, string]
     typeFields: Table[string, seq[tuple[name, ctype: string]]]
     enumNames: seq[string]
+    errorNames: seq[string]
     variantInfo: Table[string, VariantInfo]  # type name -> variant info
     activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
     okTypes*: seq[string]  # Ok types already emitted
@@ -535,12 +536,24 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
 
   elif s of ResultAssignStmt:
+    let val = ResultAssignStmt(s).value
+    # Check if assigning an error type (result = Error(...))
+    if g.inResultFunc and val of CallExpr and CallExpr(val).fn of IdentExpr:
+      let name = IdentExpr(CallExpr(val).fn).name
+      if name in g.errorNames:
+        g.emitIndent()
+        g.emit("__result.kind = " & g.currentResultName & "_" & name & ";\n")
+        g.emitIndent()
+        g.emit("__result." & name & "_err = ")
+        g.genExpr(val)
+        g.emit(";\n")
+        return
     g.emitIndent()
     if g.inResultFunc:
       g.emit("__result.value = ")
     else:
       g.emit("__result = ")
-    g.genExpr(ResultAssignStmt(s).value); g.emit(";\n")
+    g.genExpr(val); g.emit(";\n")
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
@@ -704,6 +717,49 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           vi.fields.add(VariantFieldInfo(fieldName: f.name, branchValues: b.values))
       g.variantInfo[o.name] = vi
 
+  elif s of ErrorDeclStmt:
+    let e = ErrorDeclStmt(s)
+    g.errorNames.add(e.name)
+    var allFields: seq[tuple[name, ctype: string]]
+    g.emit("typedef struct {\n")
+    g.indent += 1
+    for f in e.fields:
+      let ct = g.typeToCStr(f.typeAnn)
+      g.emitLine(ct & " " & f.name & ";")
+      allFields.add((f.name, ct))
+    # Error variant (tagged union) — same as object
+    if e.variant.tagName.len > 0:
+      g.emitLine(e.variant.tagType & " " & e.variant.tagName & ";")
+      allFields.add((e.variant.tagName, e.variant.tagType))
+      g.emitLine("union {")
+      g.indent += 1
+      for b in e.variant.branches:
+        if b.fields.len == 1:
+          let f = b.fields[0]
+          let ct = g.typeToCStr(f.typeAnn)
+          g.emitLine(ct & " " & f.name & ";")
+          allFields.add((f.name, ct))
+        elif b.fields.len > 1:
+          g.emitLine("struct {")
+          g.indent += 1
+          for f in b.fields:
+            let ct = g.typeToCStr(f.typeAnn)
+            g.emitLine(ct & " " & f.name & ";")
+            allFields.add((f.name, ct))
+          g.indent -= 1
+          g.emitLine("};")
+      g.indent -= 1
+      g.emitLine("};")
+    g.indent -= 1
+    g.emit("} " & e.name & ";\n")
+    g.typeFields[e.name] = allFields
+    if e.variant.tagName.len > 0:
+      var vi = VariantInfo(tagName: e.variant.tagName, tagType: e.variant.tagType)
+      for b in e.variant.branches:
+        for f in b.fields:
+          vi.fields.add(VariantFieldInfo(fieldName: f.name, branchValues: b.values))
+      g.variantInfo[e.name] = vi
+
   elif s of EnumDeclStmt:
     let en = EnumDeclStmt(s)
     g.enumNames.add(en.name)
@@ -849,23 +905,6 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else:
       g.emit("exit(0);\n")
 
-  elif s of RaiseStmt:
-    let r = RaiseStmt(s)
-    if g.inResultFunc:
-      # raise DivError(...) → set kind and return
-      if r.expr of CallExpr and CallExpr(r.expr).fn of IdentExpr:
-        let errType = IdentExpr(CallExpr(r.expr).fn).name
-        g.emitIndent()
-        g.emit("__result.kind = " & g.currentResultName & "_" & errType & ";\n")
-        g.emitIndent()
-        g.emit("__result." & errType & "_err = ")
-        g.genExpr(r.expr)
-        g.emit(";\n")
-        g.emitLine("return __result;")
-      else:
-        g.emitLine("/* raise: unknown error expression */")
-    else:
-      g.emitLine("/* raise outside error function */")
 
   elif s of DiscardStmt:
     g.emitLine("(void)0;")
@@ -943,7 +982,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
 
   # Types first
   for s in stmts:
-    if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
+    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
       g.genStmt(s); g.emit("\n")
 
   # Result structs + forward declarations
@@ -978,7 +1017,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   for s in stmts:
     if s of FnDeclStmt:
       g.genStmt(s); g.emit("\n")
-    elif not (s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt):
+    elif not (s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt):
       topLevel.add(s)
 
   # Top-level code → main
@@ -1000,7 +1039,7 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
 
   # Types
   for s in stmts:
-    if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
+    if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
       g.genStmt(s); g.emit("\n")
 
   # Forward declarations + result structs
@@ -1047,6 +1086,9 @@ proc generateHeader*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
     if s of ObjectDeclStmt:
       let o = ObjectDeclStmt(s)
       if o.public: g.emit("/* type " & o.name & " from " & modName & " */\n")
+    if s of ErrorDeclStmt:
+      let er = ErrorDeclStmt(s)
+      if er.public: g.emit("/* error " & er.name & " from " & modName & " */\n")
     if s of EnumDeclStmt:
       let e = EnumDeclStmt(s)
       if e.public: g.emit("/* enum " & e.name & " from " & modName & " */\n")

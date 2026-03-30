@@ -1,11 +1,12 @@
 # Error handling with ok / raise
 
-@DivError! object:
-  @message view[Str]  # TODO: change to Str when Str runtime is implemented
+@DivError! error:
+  @message Str
 
 @divide! func(@a int, @b int) ok int else DivError:
   if b == 0:
-    raise DivError(message="division by zero")
+    result = DivError(message=~"division by zero")
+    return
   result = a / b
 
 # do...else

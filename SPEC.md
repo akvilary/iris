@@ -268,7 +268,8 @@ from net import connect, listen
 
 # Now available directly:
 do @conn = connect("localhost", 8080) else:
-  quit(conn.getError())
+  return
+  # quit(conn.getError())
 ```
 
 ### From export — re-export from nested modules
@@ -318,11 +319,11 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 ```
 
 - `!` after name = public
-- `ok T` — pure function, cannot raise
-- `ok T else E1, E2` — can raise E1 or E2, compiler checks
+- `ok T` — pure function, cannot return errors
+- `ok T else E1, E2` — can return E1 or E2, compiler checks
 - `.get()` to unwrap result — always explicit, no auto-unwrap
 - `?` operator for error propagation
-- `raise` to return an error
+- Errors returned via `result = Error(...)` + `return` (no `raise` keyword)
 
 ### Return Values
 
@@ -414,7 +415,7 @@ lives on the stack — only the data is in heap. This is explicit:
 # Heap — explicit, you chose a heap type
 @buf mut Str = ~""                            # buffer in heap
 @list mut Seq[int] = ~[]                      # buffer in heap
-@map mut HashTable[Str, int] = ~{}            # buffer in heap
+@map mut HashTable[Str, int] = ~{~"key": 1}   # buffer in heap
 @ids HashSet[int] = ~{1, 2, 3}               # buffer in heap
 @user Heap[User] = ~User(name=~"Andrey")      # object in heap
 
@@ -1668,39 +1669,64 @@ No runtime needed — just C code with pthreads under the hood.
 
 ## Error Handling
 
-Return type is the success type, errors marked with `!`:
-`ok T else Error1 else Error2`. All possible errors must be listed.
-Compiler checks every `raise` matches the declared errors.
+Return type is the success type, errors listed after `else`:
+`ok T else Error1, Error2`. All possible errors must be listed.
+Errors are returned via `result = Error(...)` — same mechanism as success values.
+No `raise` keyword — one unified `result` mechanism for both paths.
 No automatic unwrapping — always use `.get()` to extract Ok value.
 
 ### Declaring errors
 
-Error types are regular objects:
+Error types use the `error` keyword (not `object`). This tells the compiler
+the type is an error — falsy in conditions, assignable to `result`, usable with `case`, `do...else`.
 
 ```
-@DivError! object:
+# Simple errors
+@DivError! error:
   @message Str
 
-@IoError! object:
+@IoError! error:
   @path Str
   @message Str
 
-@ParseError! object:
+@ParseError! error:
   @line int
   @message Str
 ```
 
+Grouped errors use enum variants (no inheritance — consistent with
+"no class inheritance, composition only"):
+
+```
+@HttpErrorKind! enum:
+  @notFound, @serverError, @timeout
+
+@HttpError! error:
+  @message Str
+  case @kind HttpErrorKind:
+    of notFound:
+      @path Str
+    of serverError:
+      @code int
+    of timeout:
+      discard
+```
+
+Only types declared with `error` can be used after `else` in function
+signatures and assigned to `result`. Assigning a regular `object` to
+`result` in an error-returning function is a compile error.
+
 ### Returning errors (function author)
 
-`!` marks error types in the signature. Inside the body,
-`result = value` — compiler wraps in Ok automatically.
-`raise Error(...)` — returns the error.
+Errors are returned via the same `result` mechanism as success values.
+The compiler distinguishes by type — `error` types vs regular values:
 
 ```
 @divide! func(@a int, @b int) ok int else DivError:
   if b == 0:
-    raise DivError(message="division by zero")
-  result = a / b          # compiler wraps in Ok
+    result = DivError(message=~"division by zero")
+    return                 # early exit with error
+  result = a / b           # compiler wraps in Ok
 
 @readConfig! func(@path view[Str]) ok Config else IoError, ParseError:
   @raw = fs.read(path)?              # ? propagates IoError up
@@ -1709,10 +1735,10 @@ Error types are regular objects:
 ```
 
 Compiler checks:
-- `raise DivError(...)` — `DivError` is in signature → OK
-- `raise SomeOther(...)` — not in signature → **compile error**
+- `result = DivError(...)` — `DivError` is in signature → OK
+- `result = SomeOther(...)` — not in signature → **compile error**
 - `?` propagates errors from callee — must be compatible with signature
-- Function without `!` errors → pure, cannot raise
+- Function without errors → pure, assigning error type to `result` is compile error
 
 ### Handling errors (caller side)
 
@@ -1772,11 +1798,11 @@ case response:
 
 | Syntax | What it does |
 |--------|-------------|
+| `result = Error(...)` | Return an error from function |
 | `?` | Propagate error to caller |
 | `.get()` | Explicit unwrap of Ok value — always required |
 | `do @x = f() else:` | Check for `Ok`, handle error inline |
 | `case` | Pattern match on `Ok` and specific error types |
-| `raise` | Return an error from function |
 
 ## Tooling (built into compiler)
 
