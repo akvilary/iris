@@ -504,11 +504,22 @@ proc genExpr(g: var CodeGen, e: Expr) =
 # ── Condition helper ──
 
 proc genCondExpr(g: var CodeGen, e: Expr) =
-  ## Generate condition expression — Option types check .has
+  ## Generate condition expression — Option/Result types need special handling
   if e of IdentExpr:
     let ct = g.varCType(IdentExpr(e).name)
     if ct.startsWith("iris_Option_"):
       g.genExpr(e); g.emit(".has"); return
+    if ct.endsWith("_Result"):
+      g.emit("("); g.genExpr(e); g.emit(".kind == "); g.emit(ct & "_Ok)"); return
+  # not expr — check inner for Option/Result
+  if e of UnaryExpr and UnaryExpr(e).op == opNot:
+    let inner = UnaryExpr(e).expr
+    if inner of IdentExpr:
+      let ct = g.varCType(IdentExpr(inner).name)
+      if ct.startsWith("iris_Option_"):
+        g.emit("!"); g.genExpr(inner); g.emit(".has"); return
+      if ct.endsWith("_Result"):
+        g.emit("("); g.genExpr(inner); g.emit(".kind != "); g.emit(ct & "_Ok)"); return
   g.genExpr(e)
 
 # ── Statement codegen ──
