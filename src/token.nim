@@ -16,7 +16,7 @@ type
     tkComment
 
     # Keywords
-    tkFunc, tkConst, tkMut, tkDo
+    tkFunc, tkConst, tkMut
     tkIf, tkElif, tkElse
     tkWhile, tkFor, tkIn
     tkBreak, tkContinue, tkReturn, tkResult
@@ -112,7 +112,7 @@ proc newCommentToken*(text: string, line, col, len: int): Token =
         semantic: semComment)
 
 let keywords* = {
-  "func": tkFunc, "const": tkConst, "mut": tkMut, "do": tkDo,
+  "func": tkFunc, "const": tkConst, "mut": tkMut,
   "if": tkIf, "elif": tkElif, "else": tkElse,
   "while": tkWhile, "for": tkFor, "in": tkIn,
   "break": tkBreak, "continue": tkContinue, "return": tkReturn,

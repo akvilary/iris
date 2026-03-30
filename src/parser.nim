@@ -762,16 +762,6 @@ proc parseDecl(P: var Parser): Stmt =
     P.error("expected =, mut, const, func, object, error, enum, while, for, or block after @name")
     nil
 
-proc parseDoElse(P: var Parser): Stmt =
-  discard P.advance()  # skip 'do'
-  let name = P.parseAtIdent()
-  P.expect(tkEq)
-  let value = P.parseExpr()
-  P.expect(tkElse)
-  P.expect(tkColon)
-  P.skipNewlines()
-  DoElseStmt(name: name, value: value, elseBody: P.parseBlockBody())
-
 proc parseIf(P: var Parser): Stmt =
   var branches: seq[CondBranch]
   discard P.advance()
@@ -828,7 +818,6 @@ proc parseCase(P: var Parser): Stmt =
 proc parseStmt*(P: var Parser): Stmt =
   case P.peek()
   of tkAt: P.parseDecl()
-  of tkDo: P.parseDoElse()
   of tkIf: P.parseIf()
   of tkWhile:
     discard P.advance()

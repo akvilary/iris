@@ -18,17 +18,19 @@
     of timeout:
       discard
 
-# Function that raises
+# Function that returns error
 @divide! func(@a int, @b int) ok int else DivError:
   if b == 0:
     result = DivError(message=~"division by zero")
     return
   result = a / b
 
-# Usage
-do @r = divide(10, 0) else:
+# Usage — if/else
+@r = divide(10, 0)
+if not r:
   *echo("error caught")
 
-do @r = divide(10, 2) else:
+@r2 = divide(10, 2)
+if not r2:
   *echo("should not happen")
-*echo(r.get())
+*echo(r2.get())

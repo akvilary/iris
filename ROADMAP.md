@@ -22,7 +22,7 @@ Minimal compiler that can compile basic Iris programs to C.
 - [x] Enum (simple)
 - [x] Object variants (tagged union)
 - [x] Option[T]: some, none
-- [x] Result: ok T else Error (do..else, case, raise, .get())
+- [x] Result: ok T else Error (if/else, case, .get())
 - [x] case/of with exhaustiveness checking
 - [x] Tuples (named + unnamed, block + inline)
 - [ ] Generics (duck typing at instantiation)
@@ -59,8 +59,7 @@ Minimal compiler that can compile basic Iris programs to C.
 
 - [x] `ok T else E` syntax in signatures
 - [ ] `?` operator (proper codegen)
-- [x] `do...else` (error handling)
-- [x] `raise` (explicit error return)
+- [x] `result = Error(...)` (error return via result)
 - [x] `quit()` / `quit(error)`
 - [x] Compile-time check: raise matches signature
 

@@ -267,9 +267,9 @@ import json
 from net import connect, listen
 
 # Now available directly:
-do @conn = connect("localhost", 8080) else:
+@conn = connect("localhost", 8080)
+if not conn:
   return
-  # quit(conn.getError())
 ```
 
 ### From export — re-export from nested modules
@@ -1530,9 +1530,10 @@ block:
 
   @urls_loop for @url in urls:
     spawn:
-      do @data = fetch(url) else:
-        break urls_loop
-      ch.send(data)
+      @data = fetch(url)
+        if not data:
+          break urls_loop
+      ch.send(data.get())
 
   for @_ in urls:
     @recv block:
@@ -1689,7 +1690,7 @@ No automatic unwrapping — always use `.get()` to extract Ok value.
 ### Declaring errors
 
 Error types use the `error` keyword (not `object`). This tells the compiler
-the type is an error — falsy in conditions, assignable to `result`, usable with `case`, `do...else`.
+the type is an error — falsy in conditions, assignable to `result`, usable with `case`.
 
 ```
 # Simple errors
@@ -1765,28 +1766,22 @@ Caller must include compatible error types in its own signature:
   result = newApp(cfg.get())
 ```
 
-#### 2. `do...else` — handle inline
+#### 2. `if`/`else` — handle inline
 
-`do` executes and checks for `Ok`. If not `Ok` — runs the `else` block.
-No automatic unwrap — always use `.get()` explicitly.
+Assign result, then check with `if`:
 
 ```
 # Handle error
-do @conn = connect("localhost", 8080) else:
-  *echo(conn)              # conn is the error value itself
+@conn = connect("localhost", 8080)
+if not conn:
+  *echo("connection failed")
   quit()
 @c = conn.get()           # explicit unwrap — always required
 
-# Log and continue
-do @cfg = readConfig("app.toml") else:
-  *echo("Config failed: ", cfg)
-
 # Fallback value
-do @cfg = readConfig("app.toml") else:
+@cfg = readConfig("app.toml")
+if not cfg:
   @cfg = Config.default()
-
-# One-liner
-do @conn = connect("localhost", 8080) else: quit()
 ```
 
 #### 3. `case` — pattern match on all cases
@@ -1812,7 +1807,7 @@ case response:
 | `result = Error(...)` | Return an error from function |
 | `?` | Propagate error to caller |
 | `.get()` | Explicit unwrap of Ok value — always required |
-| `do @x = f() else:` | Check for `Ok`, handle error inline |
+| `if`/`else` | Check result, handle error inline |
 | `case` | Pattern match on `Ok` and specific error types |
 
 ## Tooling (built into compiler)

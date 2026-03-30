@@ -1,4 +1,4 @@
-# Error handling with ok / raise
+# Error handling with result
 
 @DivError! error:
   @message Str
@@ -9,8 +9,9 @@
     return
   result = a / b
 
-# do...else
-do @r = divide(10, 3) else:
+# if/else
+@r = divide(10, 3)
+if not r:
   *echo("error")
   quit()
 *echo(r.get())

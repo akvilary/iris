@@ -168,11 +168,6 @@ type
     typeAnn*: TypeExpr  # nil = inferred
     value*: Expr
 
-  DoElseStmt* = ref object of Stmt
-    name*: string
-    value*: Expr
-    elseBody*: seq[Stmt]
-
   AssignStmt* = ref object of Stmt
     target*: Expr
     value*: Expr

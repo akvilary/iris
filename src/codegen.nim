@@ -547,23 +547,6 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else: g.emit("0")
     g.emit(";\n")
 
-  elif s of DoElseStmt:
-    let d = DoElseStmt(s)
-    let ctype = g.inferCType(d.value)
-    g.varTypes[d.name] = ctype
-    g.emitIndent(); g.emit(ctype & " " & d.name & " = ")
-    g.genExpr(d.value); g.emit(";\n")
-    # Check if result type has _Ok kind (error-returning function)
-    g.emitIndent()
-    if ctype.endsWith("_Result"):
-      g.emit("if (" & d.name & ".kind != " & ctype & "_Ok) {\n")
-    else:
-      g.emit("if (!" & d.name & ") {\n")
-    g.indent += 1
-    for st in d.elseBody: g.genStmt(st)
-    g.indent -= 1
-    g.emitLine("}")
-
   elif s of CompoundAssignStmt:
     let ca = CompoundAssignStmt(s)
     g.emitIndent(); g.genExpr(ca.target)
