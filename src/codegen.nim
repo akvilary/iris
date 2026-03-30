@@ -30,6 +30,9 @@ type
     importedModules*: seq[string]  # list of imported module names
     modulePublicNames*: Table[string, seq[string]]  # module -> list of public names
     nameAliases*: Table[string, string]  # local name -> C name (from imports)
+    genericFuncs*: Table[string, FnDeclStmt]  # generic func name -> AST
+    emittedSpecializations*: seq[string]  # already emitted specializations
+    pendingSpecializations*: string  # code to emit before main
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -82,6 +85,21 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
 
 proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
+
+proc substituteType(t: TypeExpr, subs: Table[string, string]): TypeExpr =
+  ## Replace generic type params with concrete types
+  if t == nil: return nil
+  if t of NamedType:
+    let n = NamedType(t).name
+    if n in subs: return NamedType(name: subs[n])
+    return t
+  if t of GenericType:
+    let gt = GenericType(t)
+    var newArgs: seq[TypeExpr]
+    for a in gt.args:
+      newArgs.add(substituteType(a, subs))
+    return GenericType(name: gt.name, args: newArgs)
+  return t
 
 proc escapeC(s: string): string =
   for ch in s:
@@ -159,6 +177,20 @@ proc inferCType(g: CodeGen, e: Expr): string =
         return "iris_Option_int64_t"  # default, needs type param
       if name in g.typeFields: return name
       if name in g.fnReturnTypes: return g.fnReturnTypes[name]
+      # Generic function call — infer return type from specialization
+      if name in g.genericFuncs:
+        let gf = g.genericFuncs[name]
+        var subs = initTable[string, string]()
+        for i, param in gf.params:
+          if i < c.args.len:
+            let ct = g.inferCType(c.args[i].value)
+            if param.typeAnn of NamedType:
+              let tn = NamedType(param.typeAnn).name
+              if tn in gf.genericParams:
+                subs[tn] = ct
+        if gf.returnType != nil:
+          let specRet = substituteType(gf.returnType, subs)
+          return g.typeToCStr(specRet)
       return g.varTypes.getOrDefault(name, "int64_t")
   if e of FieldAccessExpr:
     let fa = FieldAccessExpr(e)
@@ -179,6 +211,7 @@ proc ensureOptionType(g: var CodeGen, valType, optType: string)
 # ── Expression codegen ──
 
 proc genExpr(g: var CodeGen, e: Expr)
+proc genStmt*(g: var CodeGen, s: Stmt)
 
 proc genEchoArg(g: var CodeGen, e: Expr) =
   if e of BoolLitExpr:
@@ -374,6 +407,63 @@ proc genExpr(g: var CodeGen, e: Expr) =
             g.emit("." & fields[i].name & " = ")
           g.genExpr(arg.value)
         g.emit("}"); return
+      # Generic function call — monomorphize
+      if name in g.genericFuncs:
+        let gf = g.genericFuncs[name]
+        # Infer concrete types from arguments
+        var subs = initTable[string, string]()
+        for i, param in gf.params:
+          if i < c.args.len:
+            let concreteType = g.inferCType(c.args[i].value)
+            # Match param type against generic params
+            if param.typeAnn of NamedType:
+              let tn = NamedType(param.typeAnn).name
+              if tn in gf.genericParams:
+                subs[tn] = concreteType
+            elif param.typeAnn of GenericType:
+              let gt = GenericType(param.typeAnn)
+              # view[T] → extract inner type
+              if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
+                let inner = NamedType(gt.args[0]).name
+                if inner in gf.genericParams:
+                  # concreteType is iris_view_X → extract X
+                  if concreteType.startsWith("iris_view_"):
+                    subs[inner] = concreteType[10..^1]
+                  else:
+                    subs[inner] = concreteType
+        # Build specialized name
+        let specName = name & "_" & gf.genericParams.mapIt(subs.getOrDefault(it, "unknown")).join("_")
+        # Emit specialization if not yet emitted
+        if specName notin g.emittedSpecializations:
+          g.emittedSpecializations.add(specName)
+          # Generate specialized function into pending buffer
+          let origOutput = g.output
+          let origIndent = g.indent
+          g.output = ""
+          g.indent = 0
+          var specParams: seq[Param]
+          for p in gf.params:
+            specParams.add(Param(name: p.name, modifier: p.modifier,
+                                 typeAnn: substituteType(p.typeAnn, subs)))
+          let specReturn = substituteType(gf.returnType, subs)
+          let ret = if specReturn != nil: g.typeToCStr(specReturn) else: "void"
+          g.emit(ret & " " & specName & "(" & g.formatParams(specParams) & ") {\n")
+          g.indent = 1
+          if specReturn != nil: g.emitLine(ret & " __result;")
+          for st in gf.body: g.genStmt(st)
+          if specReturn != nil: g.emitLine("return __result;")
+          g.indent = 0
+          g.emit("}\n\n")
+          g.pendingSpecializations.add(g.output)
+          g.output = origOutput
+          g.indent = origIndent
+          g.fnReturnTypes[specName] = ret
+        g.emit(specName & "(")
+        for i, arg in c.args:
+          if i > 0: g.emit(", ")
+          g.genExpr(arg.value)
+        g.emit(")")
+        return
     g.genExpr(c.fn); g.emit("(")
     for i, arg in c.args:
       if i > 0: g.emit(", ")
@@ -524,8 +614,6 @@ proc genCondExpr(g: var CodeGen, e: Expr) =
 
 # ── Statement codegen ──
 
-proc genStmt*(g: var CodeGen, s: Stmt)
-
 proc genStmt*(g: var CodeGen, s: Stmt) =
   if s of DeclStmt:
     let d = DeclStmt(s)
@@ -595,6 +683,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
+    # Generic functions — store for monomorphization, don't emit
+    if f.genericParams.len > 0:
+      g.genericFuncs[f.name] = f
+      return
     let hasReturn = f.returnType != nil
     let hasErrors = f.errorTypes.len > 0
 
@@ -1023,10 +1115,13 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
     if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
       g.genStmt(s); g.emit("\n")
 
-  # Result structs + forward declarations
+  # Result structs + forward declarations (skip generics — monomorphized later)
   for s in stmts:
     if s of FnDeclStmt:
       let f = FnDeclStmt(s)
+      if f.genericParams.len > 0:
+        g.genericFuncs[f.name] = f
+        continue
       if f.errorTypes.len > 0 and f.returnType != nil:
         # Pre-emit result struct so forward decl can use it
         let valType = g.typeToCStr(f.returnType)
@@ -1050,7 +1145,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
         g.fnReturnTypes[f.name] = ret
   g.emit("\n")
 
-  # Functions
+  # Functions (non-generic)
   var topLevel: seq[Stmt]
   for s in stmts:
     if s of FnDeclStmt:
@@ -1060,11 +1155,20 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
 
   # Top-level code → main
   if topLevel.len > 0:
-    g.emit("int main(void) {\n")
-    g.indent += 1
+    # First pass: generate main body to trigger specializations
+    let origOutput = g.output
+    g.output = ""
+    g.indent = 1
     for s in topLevel: g.genStmt(s)
     g.emitLine("return 0;")
-    g.indent -= 1
+    let mainBody = g.output
+    g.output = origOutput
+    g.indent = 0
+    # Emit collected specializations before main
+    if g.pendingSpecializations.len > 0:
+      g.emit(g.pendingSpecializations)
+    g.emit("int main(void) {\n")
+    g.emit(mainBody)
     g.emit("}\n")
 
   result = g.output

@@ -555,6 +555,14 @@ proc parseDecl(P: var Parser): Stmt =
     DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
   of tkFunc:
     discard P.advance()
+    # Optional generic params: func[T, U](...)
+    var genericParams: seq[string]
+    if P.at(tkLBracket):
+      discard P.advance()
+      while not P.at(tkRBracket) and not P.at(tkEof):
+        genericParams.add(P.parseIdentName())
+        if P.at(tkComma): discard P.advance()
+      P.expect(tkRBracket)
     P.expect(tkLParen)
     var params: seq[Param]
     while not P.at(tkRParen) and not P.at(tkEof):
@@ -582,8 +590,8 @@ proc parseDecl(P: var Parser): Stmt =
     P.expect(tkColon)
     P.skipNewlines()
     let body = P.parseBlockBody()
-    FnDeclStmt(name: at.name, public: at.public, params: params,
-               returnType: returnType, errorTypes: errorTypes, body: body)
+    FnDeclStmt(name: at.name, public: at.public, genericParams: genericParams,
+               params: params, returnType: returnType, errorTypes: errorTypes, body: body)
   of tkObject:
     discard P.advance()
     var parent = ""

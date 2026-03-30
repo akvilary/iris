@@ -1264,7 +1264,8 @@ A type automatically satisfies a concept if it has the required methods:
 
 ```
 @map func[T, U](@list view[T], @f func(T) ok U) ok Seq[U]:
-  result = [f(x) for x in list]
+  for @x in list:
+    result.add(f(x))
 
 # With concept constraint (optional):
 @printAll func[T: Printable](@items view[T]):

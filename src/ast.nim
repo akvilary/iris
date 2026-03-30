@@ -188,6 +188,7 @@ type
   FnDeclStmt* = ref object of Stmt
     name*: string
     public*: bool
+    genericParams*: seq[string]  # [T, U] — empty if not generic
     params*: seq[Param]
     returnType*: TypeExpr  # nil = void
     errorTypes*: seq[TypeExpr]  # !Error1, !Error2

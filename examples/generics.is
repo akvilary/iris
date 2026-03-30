@@ -1,0 +1,25 @@
+# Generics demo
+
+# Generic identity function
+@identity func[T](@x T) ok T:
+  result = x
+
+# Generic with two type params
+@first func[A, B](@a A, @b B) ok A:
+  result = a
+
+# Usage with int
+@a = identity(42)
+*echo(a)
+
+# Usage with bool — must infer bool, not int
+@b = identity(true)
+*echo(b)
+
+# Usage with float
+@c = identity(3.14)
+*echo(c)
+
+# Two type params
+@d = first(10, true)
+*echo(d)
