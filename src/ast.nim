@@ -97,9 +97,14 @@ type
 
   SeqLitExpr* = ref object of Expr
     elems*: seq[Expr]
+    fillValue*: Expr    # ~[value: count] — nil if not fill syntax
+    fillCount*: Expr
+    capacityOnly*: bool # ~[:count] — true if capacity-only (no fill)
 
   ArrayLitExpr* = ref object of Expr
     elems*: seq[Expr]
+    fillValue*: Expr    # [value: count] — nil if not fill syntax
+    fillCount*: Expr
 
   HashTableEntry* = object
     key*: Expr
@@ -160,6 +165,7 @@ type
     name*: string
     public*: bool
     modifier*: DeclModifier
+    typeAnn*: TypeExpr  # nil = inferred
     value*: Expr
 
   DoElseStmt* = ref object of Stmt

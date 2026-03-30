@@ -433,14 +433,41 @@ proc genExpr(g: var CodeGen, e: Expr) =
       if i > 0: g.emit(", ")
       g.genExpr(el.value)
     g.emit(")")
-  elif e of ArrayLitExpr or e of SeqLitExpr:
-    let elems = if e of ArrayLitExpr: ArrayLitExpr(e).elems
-                else: SeqLitExpr(e).elems
-    g.emit("{")
-    for i, el in elems:
-      if i > 0: g.emit(", ")
-      g.genExpr(el)
-    g.emit("}")
+  elif e of ArrayLitExpr:
+    let a = ArrayLitExpr(e)
+    if a.fillValue != nil:
+      # [value: count] → iris_array_fill(value, count)
+      g.emit("iris_array_fill(")
+      g.genExpr(a.fillValue)
+      g.emit(", ")
+      g.genExpr(a.fillCount)
+      g.emit(")")
+    else:
+      g.emit("{")
+      for i, el in a.elems:
+        if i > 0: g.emit(", ")
+        g.genExpr(el)
+      g.emit("}")
+  elif e of SeqLitExpr:
+    let s = SeqLitExpr(e)
+    if s.capacityOnly:
+      # ~[:count] → iris_Seq_with_capacity(count)
+      g.emit("iris_Seq_with_capacity(")
+      g.genExpr(s.fillCount)
+      g.emit(")")
+    elif s.fillValue != nil:
+      # ~[value: count] → iris_Seq_fill(value, count)
+      g.emit("iris_Seq_fill(")
+      g.genExpr(s.fillValue)
+      g.emit(", ")
+      g.genExpr(s.fillCount)
+      g.emit(")")
+    else:
+      g.emit("{")
+      for i, el in s.elems:
+        if i > 0: g.emit(", ")
+        g.genExpr(el)
+      g.emit("}")
   elif e of HashTableLitExpr:
     let ht = HashTableLitExpr(e)
     g.emit("iris_HashTable_from(" & $ht.entries.len)
@@ -491,7 +518,24 @@ proc genStmt*(g: var CodeGen, s: Stmt)
 proc genStmt*(g: var CodeGen, s: Stmt) =
   if s of DeclStmt:
     let d = DeclStmt(s)
-    let ctype = if d.value != nil: g.inferCType(d.value) else: "int64_t"
+    # Validate array fill size matches type annotation
+    if d.typeAnn != nil and d.typeAnn of GenericType:
+      let gt = GenericType(d.typeAnn)
+      if gt.name == "array" and gt.args.len == 2 and d.value != nil and d.value of ArrayLitExpr:
+        let arr = ArrayLitExpr(d.value)
+        if arr.fillCount != nil and arr.fillCount of IntLitExpr and gt.args[1] of NamedType:
+          let fillN = IntLitExpr(arr.fillCount).val
+          let sizeStr = NamedType(gt.args[1]).name
+          var typeN: int64 = -1
+          try: typeN = parseInt(sizeStr)
+          except: discard
+          if typeN >= 0 and fillN != typeN:
+            raise newException(ValueError,
+              "error: array size mismatch — type says " & $typeN &
+              " but fill has " & $fillN & " elements")
+    let ctype = if d.typeAnn != nil: g.typeToCStr(d.typeAnn)
+                elif d.value != nil: g.inferCType(d.value)
+                else: "int64_t"
     g.varTypes[d.name] = ctype
     g.emitIndent()
     case d.modifier

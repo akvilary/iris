@@ -1,0 +1,15 @@
+# Fill syntax demo
+
+# Array fill — [value: count]
+@zeros array[int, 5] = [0: 5]
+
+# Seq fill — ~[value: count]
+@ones mut Seq[int] = ~[1: 10]
+
+# Seq with capacity only — ~[:count]
+@reserved mut Seq[int] = ~[:100]
+reserved.add(42)
+
+# Regular literals still work
+@arr = [1, 2, 3]
+@seq mut = ~[10, 20, 30]

@@ -410,7 +410,7 @@ lives on the stack — only the data is in heap. This is explicit:
 @x int = 42                           # 8 bytes stack
 @name view[Str] = "Alice"                   # 16 bytes stack (pointer + length)
 @point = Point(x=10, y=20)           # sizeof(Point) stack
-@arr array[int, 100] = [0; 100]      # 800 bytes stack
+@arr array[int, 100] = [0: 100]      # 800 bytes stack
 
 # Heap — explicit, you chose a heap type
 @buf mut Str = ~""                            # buffer in heap
@@ -738,12 +738,23 @@ processRoles(roles)
 # Fixed array — stack
 @fixed: array[int, 5] = [1, 2, 3, 4, 5]
 
+# Fill syntax — [value: count]
+@zeros array[int, 100] = [0: 100]       # 100 zeros
+
 # Dynamic sequence — heap, created with ~[...]
 @dynamic mut = ~[1, 2, 3]
 dynamic.add(4)
 
 # Explicit type annotation also works
 @other mut Seq[int] = ~[10, 20, 30]
+
+# Fill syntax for Seq — ~[value: count]
+@filled mut Seq[int] = ~[0: 100]        # Seq with 100 zeros
+
+# Empty Seq with pre-allocated capacity — ~[:capacity]
+@reserved mut Seq[int] = ~[:100]         # len=0, capacity=100
+reserved.add(42)                          # no reallocation needed
+# reserved[0] before add → runtime error: index out of bounds
 
 # Empty Seq
 @empty mut = Seq[int]()

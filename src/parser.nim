@@ -103,6 +103,11 @@ proc parseType*(P: var Parser): TypeExpr =
     P.expect(tkRParen)
     return TupleType(elems: elems)
 
+  # Integer literal as type arg (e.g. array[int, 100])
+  if P.at(tkIntLit):
+    let val = P.advance().intVal
+    return NamedType(name: $val)
+
   let name = P.parseIdentName()
   if P.at(tkLBracket):
     discard P.advance()
@@ -289,12 +294,25 @@ proc parsePrimary(P: var Parser): Expr =
     P.parseParenOrTuple()
   of tkLBracket:
     discard P.advance()
-    var elems: seq[Expr]
-    while not P.at(tkRBracket) and not P.at(tkEof):
-      elems.add(P.parseExpr())
-      if P.at(tkComma): discard P.advance()
-    P.expect(tkRBracket)
-    ArrayLitExpr(elems: elems)
+    if P.at(tkRBracket):
+      discard P.advance()
+      ArrayLitExpr(elems: @[])
+    else:
+      let first = P.parseExpr()
+      if P.at(tkColon):
+        # [value: count] → fill syntax
+        discard P.advance()
+        let count = P.parseExpr()
+        P.expect(tkRBracket)
+        ArrayLitExpr(fillValue: first, fillCount: count)
+      else:
+        var elems = @[first]
+        while P.at(tkComma):
+          discard P.advance()
+          if P.at(tkRBracket): break
+          elems.add(P.parseExpr())
+        P.expect(tkRBracket)
+        ArrayLitExpr(elems: elems)
   of tkTilde:
     discard P.advance()
     if P.at(tkStringLit):
@@ -322,12 +340,31 @@ proc parsePrimary(P: var Parser): Expr =
     elif P.at(tkLBracket):
       # ~[...] → SeqLitExpr
       discard P.advance()
-      var elems: seq[Expr]
-      while not P.at(tkRBracket) and not P.at(tkEof):
-        elems.add(P.parseExpr())
-        if P.at(tkComma): discard P.advance()
-      P.expect(tkRBracket)
-      SeqLitExpr(elems: elems)
+      if P.at(tkRBracket):
+        discard P.advance()
+        SeqLitExpr(elems: @[])
+      elif P.at(tkColon):
+        # ~[:count] → capacity-only
+        discard P.advance()
+        let count = P.parseExpr()
+        P.expect(tkRBracket)
+        SeqLitExpr(capacityOnly: true, fillCount: count)
+      else:
+        let first = P.parseExpr()
+        if P.at(tkColon):
+          # ~[value: count] → fill syntax
+          discard P.advance()
+          let count = P.parseExpr()
+          P.expect(tkRBracket)
+          SeqLitExpr(fillValue: first, fillCount: count)
+        else:
+          var elems = @[first]
+          while P.at(tkComma):
+            discard P.advance()
+            if P.at(tkRBracket): break
+            elems.add(P.parseExpr())
+          P.expect(tkRBracket)
+          SeqLitExpr(elems: elems)
     elif P.at(tkLBrace):
       # ~{...} → HashTableLitExpr or HashSetLitExpr
       discard P.advance()
@@ -491,12 +528,31 @@ proc parseDecl(P: var Parser): Stmt =
     DeclStmt(name: at.name, public: at.public, modifier: declDefault, value: P.parseExpr())
   of tkMut:
     discard P.advance()
-    P.expect(tkEq)
-    DeclStmt(name: at.name, public: at.public, modifier: declMut, value: P.parseExpr())
+    if P.at(tkEq):
+      # @name mut = value
+      discard P.advance()
+      DeclStmt(name: at.name, public: at.public, modifier: declMut, value: P.parseExpr())
+    else:
+      # @name mut Type = value
+      let typeAnn = P.parseType()
+      P.expect(tkEq)
+      DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn, value: P.parseExpr())
   of tkConst:
     discard P.advance()
+    if P.at(tkEq):
+      # @name const = value
+      discard P.advance()
+      DeclStmt(name: at.name, public: at.public, modifier: declConst, value: P.parseExpr())
+    else:
+      # @name const Type = value
+      let typeAnn = P.parseType()
+      P.expect(tkEq)
+      DeclStmt(name: at.name, public: at.public, modifier: declConst, typeAnn: typeAnn, value: P.parseExpr())
+  of tkIdent:
+    # @name Type = value (type annotation, immutable)
+    let typeAnn = P.parseType()
     P.expect(tkEq)
-    DeclStmt(name: at.name, public: at.public, modifier: declConst, value: P.parseExpr())
+    DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
   of tkFunc:
     discard P.advance()
     P.expect(tkLParen)
