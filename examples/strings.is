@@ -1,0 +1,18 @@
+# String types demo
+
+# view[Str] — from literal
+@greeting = "hello"
+*echo(greeting)
+
+# Str — owned, from ~"..."
+@owned = ~"hello owned"
+*echo(owned)
+
+# Str — from Str() constructor
+@built = Str("hello built")
+*echo(built)
+
+# Str — owned interpolation with ~"...{expr}..."
+@name = "world"
+@msg = ~"hello {name}!"
+*echo(msg)

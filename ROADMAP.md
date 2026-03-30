@@ -45,7 +45,7 @@ Minimal compiler that can compile basic Iris programs to C.
 - [ ] array[T, N] (stack)
 - [ ] Seq[T] (heap), `~[...]` literal
 - [x] view[T] (immutable view, pointer + length)
-- [ ] Str (heap, mutable builder)
+- [x] Str (heap): ~"..." literal, Str() constructor, ~"...{expr}..." interpolation
 
 ### Phase 5 — Concurrency
 

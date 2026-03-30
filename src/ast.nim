@@ -85,6 +85,12 @@ type
   StringInterpExpr* = ref object of Expr
     parts*: seq[StringPart]
 
+  StrLitExpr* = ref object of Expr
+    val*: string
+
+  StrInterpExpr* = ref object of Expr
+    parts*: seq[StringPart]
+
   RangeExpr* = ref object of Expr
     start*, finish*: Expr
     inclusive*: bool

@@ -297,13 +297,36 @@ proc parsePrimary(P: var Parser): Expr =
     ArrayLitExpr(elems: elems)
   of tkTilde:
     discard P.advance()
-    P.expect(tkLBracket)
-    var elems: seq[Expr]
-    while not P.at(tkRBracket) and not P.at(tkEof):
-      elems.add(P.parseExpr())
-      if P.at(tkComma): discard P.advance()
-    P.expect(tkRBracket)
-    SeqLitExpr(elems: elems)
+    if P.at(tkStringLit):
+      let t = P.advance()
+      StrLitExpr(val: t.strVal)
+    elif P.at(tkStringInterpStart):
+      discard P.advance()
+      var parts: seq[StringPart]
+      while true:
+        case P.peek()
+        of tkStringLit:
+          let t = P.advance()
+          if t.strVal.len > 0:
+            parts.add(StringPart(isExpr: false, lit: t.strVal))
+        of tkIdent:
+          let t = P.advance()
+          parts.add(StringPart(isExpr: true, expr: IdentExpr(name: t.strVal)))
+        of tkStringInterpEnd:
+          let t = P.advance()
+          if t.strVal.len > 0:
+            parts.add(StringPart(isExpr: false, lit: t.strVal))
+          break
+        else: break
+      StrInterpExpr(parts: parts)
+    else:
+      P.expect(tkLBracket)
+      var elems: seq[Expr]
+      while not P.at(tkRBracket) and not P.at(tkEof):
+        elems.add(P.parseExpr())
+        if P.at(tkComma): discard P.advance()
+      P.expect(tkRBracket)
+      SeqLitExpr(elems: elems)
   of tkSome, tkNone:
     let isSome = P.peek() == tkSome
     discard P.advance()

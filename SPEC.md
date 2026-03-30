@@ -126,9 +126,9 @@ else:
 
 # case as expression:
 @name = case color:
-  of Color.red: "Red"
-  of Color.green: "Green"
-  of Color.blue: "Blue"
+  of red: "Red"
+  of green: "Green"
+  of blue: "Blue"
 ```
 
 ## Truthiness
@@ -411,8 +411,8 @@ lives on the stack — only the buffer is in heap. This is explicit:
 @arr array[int, 100] = [0; 100]      # 800 bytes stack
 
 # Heap — explicit, you chose a heap type
-@buf mut Str = Str()        # buffer in heap
-@list mut Seq[int] = Seq[int]()   # buffer in heap
+@buf mut Str = ~""        # buffer in heap
+@list mut Seq[int] = ~[]    # buffer in heap
 @map mut HashTable[Str, int] = {}     # buffer in heap
 
 # Heap via Pool — explicit arena allocation
@@ -896,12 +896,23 @@ the data it points to. No dangling pointers, no use-after-free:
   return s              # error: view borrows from s, which is dropped here
 ```
 
+#### Creating strings
+
+```
+# view[Str] — from literal, zero allocation
+@name view[Str] = "Alice"
+@greeting view[Str] = "Hello, {name}!"     # interpolation
+
+# Str — owned, heap-allocated
+@owned = ~"hello"                          # ~"..." literal
+@built = Str("hello")                      # constructor from literal
+@copied = Str(name)                        # constructor from view (copies)
+@msg = ~"Hello, {name}!"                   # ~"..." with interpolation
+```
+
 #### Usage
 
 ```
-@name view[Str] = "Alice"                   # view into .rodata, 0 allocations
-@greeting view[Str] = "Hello, {name}!"     # interpolation
-
 @greet func(@s view[Str]):                  # accepts view (16 bytes)
   *echo(s)
 

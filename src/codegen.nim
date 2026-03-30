@@ -129,6 +129,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
   if e of StringLitExpr or e of StringInterpExpr: return "iris_view_Str"
+  if e of StrLitExpr or e of StrInterpExpr: return "iris_Str"
   if e of BoolLitExpr: return "bool"
   if e of RuneLitExpr: return "int32_t"
   if e of BinaryExpr:
@@ -144,6 +145,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
         return "int64_t"  # simplified
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
+      if name == "Str": return "iris_Str"
       if name == "some" and c.args.len == 1:
         return "iris_Option_" & g.inferCType(c.args[0].value)
       if name == "none":
@@ -178,7 +180,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     let ct = g.varCType(name)
     if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-    elif ct == "iris_view_Str": g.emit("(int)" & name & ".len, " & name & ".data")
+    elif ct in ["iris_view_Str", "iris_Str"]: g.emit("(int)" & name & ".len, " & name & ".data")
     else: g.genExpr(e)
   elif e of DollarExpr:
     let inner = DollarExpr(e).expr
@@ -186,7 +188,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
       let name = IdentExpr(inner).name
       let ct = g.varCType(name)
       if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-      elif ct == "iris_view_Str": g.emit("(int)" & name & ".len, " & name & ".data")
+      elif ct in ["iris_view_Str", "iris_Str"]: g.emit("(int)" & name & ".len, " & name & ".data")
       elif ct == "const char*": g.emit(name)
       else:
         for en in g.enumNames:
@@ -203,12 +205,15 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
   if args.len == 0:
     g.emit("printf(\"\\n\")"); return
   let e = args[0].value
-  if e of StringLitExpr:
-    g.emit("printf(\"%s\\n\", \"" & escapeC(StringLitExpr(e).val) & "\")")
-  elif e of StringInterpExpr:
+  if e of StringLitExpr or e of StrLitExpr:
+    let val = if e of StringLitExpr: StringLitExpr(e).val else: StrLitExpr(e).val
+    g.emit("printf(\"%s\\n\", \"" & escapeC(val) & "\")")
+  elif e of StringInterpExpr or e of StrInterpExpr:
+    let parts = if e of StringInterpExpr: StringInterpExpr(e).parts
+                else: StrInterpExpr(e).parts
     var fmt = ""
     var exprs: seq[Expr]
-    for p in StringInterpExpr(e).parts:
+    for p in parts:
       if not p.isExpr:
         fmt.add(escapeC(p.lit))
       else:
@@ -235,6 +240,25 @@ proc genExpr(g: var CodeGen, e: Expr) =
   elif e of FloatLitExpr: g.emit($FloatLitExpr(e).val)
   elif e of StringLitExpr:
     g.emit("iris_view_Str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
+  elif e of StrLitExpr:
+    g.emit("iris_Str_from(\"" & escapeC(StrLitExpr(e).val) & "\")")
+  elif e of StrInterpExpr:
+    var fmt = ""
+    var exprs: seq[Expr]
+    for p in StrInterpExpr(e).parts:
+      if not p.isExpr:
+        fmt.add(escapeC(p.lit))
+      else:
+        let (f, _) = g.printfFormat(p.expr)
+        fmt.add(f)
+        exprs.add(p.expr)
+    g.emit("iris_Str_fmt(\"" & fmt & "\"")
+    for ex in exprs:
+      let (_, needsCast) = g.printfFormat(ex)
+      g.emit(", ")
+      if needsCast: g.emit("(long long)")
+      g.genEchoArg(ex)
+    g.emit(")")
   elif e of BoolLitExpr:
     g.emit(if BoolLitExpr(e).val: "true" else: "false")
   elif e of RuneLitExpr:
@@ -283,6 +307,15 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let name = IdentExpr(c.fn).name
       if name == "echo":
         g.genEcho(c.args); return
+      # Str("literal") or Str(view) → owned string
+      if name == "Str" and c.args.len == 1:
+        if c.args[0].value of StringLitExpr:
+          g.emit("iris_Str_from(\"" & escapeC(StringLitExpr(c.args[0].value).val) & "\")")
+        else:
+          g.emit("iris_Str_from_view(")
+          g.genExpr(c.args[0].value)
+          g.emit(")")
+        return
       # some(value) → Option struct with has=true
       if name == "some" and c.args.len == 1:
         let valType = g.inferCType(c.args[0].value)
@@ -811,14 +844,35 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("#include <stdint.h>\n")
   g.emit("#include <stdbool.h>\n")
   g.emit("#include <string.h>\n")
-  g.emit("#include <stdlib.h>\n\n")
+  g.emit("#include <stdlib.h>\n")
+  g.emit("#include <stdarg.h>\n\n")
   g.emit("// view[Str] — immutable view (pointer + length)\n")
   g.emit("typedef struct { const char* data; size_t len; } iris_view_Str;\n")
   g.emit("static inline iris_view_Str iris_view_Str_from(const char* s) {\n")
   g.emit("  return (iris_view_Str){s, strlen(s)};\n")
   g.emit("}\n\n")
   g.emit("// Str — owned heap buffer (pointer + length + capacity)\n")
-  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_Str;\n\n")
+  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_Str;\n")
+  g.emit("static inline iris_Str iris_Str_from(const char* s) {\n")
+  g.emit("  size_t len = strlen(s);\n")
+  g.emit("  char* data = (char*)malloc(len + 1);\n")
+  g.emit("  memcpy(data, s, len + 1);\n")
+  g.emit("  return (iris_Str){data, len, len};\n")
+  g.emit("}\n")
+  g.emit("static inline iris_Str iris_Str_from_view(iris_view_Str v) {\n")
+  g.emit("  char* data = (char*)malloc(v.len + 1);\n")
+  g.emit("  memcpy(data, v.data, v.len);\n")
+  g.emit("  data[v.len] = '\\0';\n")
+  g.emit("  return (iris_Str){data, v.len, v.len};\n")
+  g.emit("}\n")
+  g.emit("static inline iris_Str iris_Str_fmt(const char* fmt, ...) {\n")
+  g.emit("  va_list a1, a2;\n")
+  g.emit("  va_start(a1, fmt); va_copy(a2, a1);\n")
+  g.emit("  int len = vsnprintf(NULL, 0, fmt, a1); va_end(a1);\n")
+  g.emit("  char* data = (char*)malloc(len + 1);\n")
+  g.emit("  vsnprintf(data, len + 1, fmt, a2); va_end(a2);\n")
+  g.emit("  return (iris_Str){data, (size_t)len, (size_t)len};\n")
+  g.emit("}\n\n")
 
   # Common Option types
   g.emit("// Option types\n")
