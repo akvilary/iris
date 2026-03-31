@@ -684,31 +684,31 @@ proc genExpr(g: var CodeGen, e: Expr) =
           if fa.field == vi.tagName:
             enumType = vi.tagType
     # Generate nested ternary — last branch becomes fallback (exhaustive)
+    # Wrap entire chain in () for safe embedding in larger expressions
+    g.emit("(")
     let lastIdx = ce.branches.len - 1
     for i, b in ce.branches:
       if i == lastIdx and ce.elseValue == nil:
         # Last branch without else — use as fallback
-        g.emit("("); g.genExpr(b.value); g.emit(")")
+        g.genExpr(b.value)
       else:
         g.emit("(")
         if resultType.len > 0:
-          g.emit("("); g.genExpr(ce.expr); g.emit(".kind == ")
+          g.genExpr(ce.expr); g.emit(".kind == ")
           case b.pattern.kind
           of patOk: g.emit(resultType & "_Ok")
           of patVariant: g.emit(resultType & "_" & b.pattern.name)
           else: g.emit("/* unsupported pattern */")
-          g.emit(")")
         elif enumType.len > 0:
-          g.emit("("); g.genExpr(ce.expr); g.emit(" == ")
+          g.genExpr(ce.expr); g.emit(" == ")
           g.emit(enumType & "_" & b.pattern.name)
-          g.emit(")")
         else:
-          g.emit("("); g.genExpr(ce.expr); g.emit(" == ")
+          g.genExpr(ce.expr); g.emit(" == ")
           g.emit(b.pattern.name)
-          g.emit(")")
-        g.emit(") ? ("); g.genExpr(b.value); g.emit(") : ")
+        g.emit(") ? "); g.genExpr(b.value); g.emit(" : ")
     if ce.elseValue != nil:
-      g.emit("("); g.genExpr(ce.elseValue); g.emit(")")
+      g.genExpr(ce.elseValue)
+    g.emit(")")
   else:
     g.emit("/* expr not implemented */")
 
