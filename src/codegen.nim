@@ -998,13 +998,21 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ObjectDeclStmt:
     let o = ObjectDeclStmt(s)
-    # Check: view[T] not allowed in object fields
+    # Check: view[T] not allowed in object fields (including variant fields)
     for f in o.fields:
       if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
         raise newException(ValueError,
-          "error: view[" & NamedType(GenericType(f.typeAnn).args[0]).name &
-          "] cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
+          "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
+          " cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
           "\n  in field '@" & f.name & "' of object '" & o.name & "'")
+    if o.variant.tagName.len > 0:
+      for b in o.variant.branches:
+        for f in b.fields:
+          if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+            raise newException(ValueError,
+              "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
+              " cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
+              "\n  in variant field '@" & f.name & "' of object '" & o.name & "'")
     var allFields: seq[tuple[name, ctype: string]]
     if o.parent.len > 0 and o.parent in g.typeFields:
       allFields = g.typeFields[o.parent]
@@ -1059,8 +1067,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     for f in e.fields:
       if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
         raise newException(ValueError,
-          "error: view[" & NamedType(GenericType(f.typeAnn).args[0]).name &
-          "] cannot be stored in error fields — use 'str' (static) or 'String' (owned) instead" &
+          "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
+          " cannot be stored in error fields — use 'str' (static) or 'String' (owned) instead" &
           "\n  in field '@" & f.name & "' of error '" & e.name & "'")
     g.errorNames.add(e.name)
     var allFields: seq[tuple[name, ctype: string]]
