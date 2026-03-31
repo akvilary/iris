@@ -137,7 +137,15 @@ proc parseParenOrTuple(P: var Parser): Expr
 proc parseStmt*(P: var Parser): Stmt
 proc parseBlockBody(P: var Parser): seq[Stmt]
 
-proc parseExpr*(P: var Parser): Expr = P.parseOr()
+proc parseExpr*(P: var Parser): Expr =
+  result = P.parseOr()
+  # Postfix if expression: value if cond else altValue
+  if P.at(tkIf):
+    discard P.advance()
+    let cond = P.parseOr()  # condition (not parseExpr — avoid consuming nested if)
+    P.expect(tkElse)
+    let elseValue = P.parseExpr()  # recursive — allows chaining
+    result = IfExpr(value: result, cond: cond, elseValue: elseValue)
 
 proc parseOr(P: var Parser): Expr =
   result = P.parseAnd()
@@ -409,6 +417,30 @@ proc parsePrimary(P: var Parser): Expr =
     else:
       P.error("expected string, [, {, or type name after ~")
       nil
+  of tkCase:
+    # case expression (no colon): case expr of pat value of pat value else value
+    # Inside (), newlines are suppressed by lexer. Inline: all on one line.
+    discard P.advance()
+    let expr = P.parseExpr()
+    var branches: seq[CaseExprBranch]
+    var elseValue: Expr = nil
+    while P.at(tkOf):
+      discard P.advance()
+      var pat: CasePattern
+      case P.peek()
+      of tkOk: discard P.advance(); pat = CasePattern(kind: patOk)
+      of tkSome: discard P.advance(); pat = CasePattern(kind: patSome)
+      of tkNone: discard P.advance(); pat = CasePattern(kind: patNone)
+      of tkIdent:
+        let name = P.advance().strVal
+        if name == "error": pat = CasePattern(kind: patError)
+        else: pat = CasePattern(kind: patVariant, name: name)
+      else: P.error("expected case pattern after 'of'")
+      branches.add(CaseExprBranch(pattern: pat, value: P.parseExpr()))
+    if P.at(tkElse):
+      discard P.advance()
+      elseValue = P.parseExpr()
+    CaseExpr(expr: expr, branches: branches, elseValue: elseValue)
   of tkSome, tkNone:
     let isSome = P.peek() == tkSome
     discard P.advance()
@@ -533,10 +565,13 @@ proc parseDecl(P: var Parser): Stmt =
       discard P.advance()
       DeclStmt(name: at.name, public: at.public, modifier: declMut, value: P.parseExpr())
     else:
-      # @name mut Type = value
+      # @name mut Type [= value]
       let typeAnn = P.parseType()
-      P.expect(tkEq)
-      DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn, value: P.parseExpr())
+      if P.at(tkEq):
+        discard P.advance()
+        DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn, value: P.parseExpr())
+      else:
+        DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn)
   of tkConst:
     discard P.advance()
     if P.at(tkEq):
@@ -549,10 +584,13 @@ proc parseDecl(P: var Parser): Stmt =
       P.expect(tkEq)
       DeclStmt(name: at.name, public: at.public, modifier: declConst, typeAnn: typeAnn, value: P.parseExpr())
   of tkIdent:
-    # @name Type = value (type annotation, immutable)
+    # @name Type [= value] (type annotation, immutable)
     let typeAnn = P.parseType()
-    P.expect(tkEq)
-    DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
+    if P.at(tkEq):
+      discard P.advance()
+      DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
+    else:
+      DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn)
   of tkFunc:
     discard P.advance()
     # Optional generic params: func[T, U: Concept](...)
@@ -823,7 +861,7 @@ proc parseIf(P: var Parser): Stmt =
     elseBranch = P.parseBlockBody()
   IfStmt(branches: branches, elseBranch: elseBranch)
 
-proc parseCase(P: var Parser): Stmt =
+proc parseCaseBlock(P: var Parser): Stmt =
   discard P.advance()
   let expr = P.parseExpr()
   P.expect(tkColon); P.skipNewlines()
@@ -909,7 +947,7 @@ proc parseStmt*(P: var Parser): Stmt =
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()
     SpawnStmt(body: P.parseBlockBody())
-  of tkCase: P.parseCase()
+  of tkCaseblock: P.parseCaseBlock()
   of tkImport:
     discard P.advance()
     let baseName = P.parseIdentName()

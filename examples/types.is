@@ -23,7 +23,7 @@
 *echo(c)
 
 # Case
-case c:
+caseblock c:
   of red:
     *echo("Red!")
   of green:

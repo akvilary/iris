@@ -12,6 +12,7 @@ type
     indentStack: seq[int]
     tokens: seq[Token]
     atLineStart: bool
+    bracketDepth: int   # tracks () [] {} nesting — suppress indent inside
 
 proc newLexer*(source: string): Lexer =
   Lexer(
@@ -56,6 +57,10 @@ proc handleIndentation(L: var Lexer) =
     spaces += 1
 
   if L.peek() in {'\n', '#', '\0'}:
+    return
+
+  # Inside brackets — suppress indent/dedent (like Python)
+  if L.bracketDepth > 0:
     return
 
   let current = L.currentIndent()
@@ -240,12 +245,24 @@ proc readOperator(L: var Lexer): bool =
   of '$': emit1(tkDollar)
   of '~': emit1(tkTilde)
   of '&': emit1(tkAmpersand)
-  of '(': emit1(tkLParen)
-  of ')': emit1(tkRParen)
-  of '[': emit1(tkLBracket)
-  of ']': emit1(tkRBracket)
-  of '{': emit1(tkLBrace)
-  of '}': emit1(tkRBrace)
+  of '(':
+    L.bracketDepth += 1
+    emit1(tkLParen)
+  of ')':
+    L.bracketDepth -= 1
+    emit1(tkRParen)
+  of '[':
+    L.bracketDepth += 1
+    emit1(tkLBracket)
+  of ']':
+    L.bracketDepth -= 1
+    emit1(tkRBracket)
+  of '{':
+    L.bracketDepth += 1
+    emit1(tkLBrace)
+  of '}':
+    L.bracketDepth -= 1
+    emit1(tkRBrace)
   of '-':
     discard L.advance()
     if L.peek() == '>':
@@ -299,7 +316,8 @@ proc tokenize*(L: var Lexer): seq[Token] =
     let ch = L.peek()
     case ch
     of '\n':
-      L.tokens.add(newToken(tkNewline, L.line, L.col, 1))
+      if L.bracketDepth == 0:
+        L.tokens.add(newToken(tkNewline, L.line, L.col, 1))
       discard L.advance()
       L.atLineStart = true
     of ' ', '\t', '\r':

@@ -138,12 +138,22 @@ type
     expr*: Expr
 
   IfExpr* = ref object of Expr
-    branches*: seq[CondBranch]
-    elseBranch*: seq[Stmt]
+    value*: Expr       # value if condition is true
+    cond*: Expr        # condition
+    elseValue*: Expr   # else value (may be another IfExpr for chaining)
 
   CondBranch* = object
     cond*: Expr
     body*: seq[Stmt]
+
+  CaseExprBranch* = object
+    pattern*: CasePattern
+    value*: Expr
+
+  CaseExpr* = ref object of Expr
+    expr*: Expr
+    branches*: seq[CaseExprBranch]
+    elseValue*: Expr
 
   # ── Type expressions ──
 

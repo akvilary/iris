@@ -20,7 +20,7 @@
 @s = Shape(x=10, y=20, kind=ShapeKind.circle, radius=3.14)
 *echo(s.x)
 *echo(s.y)
-case s.kind:
+caseblock s.kind:
   of circle:
     *echo(s.radius)
   of rect:

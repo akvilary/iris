@@ -1,0 +1,22 @@
+# Nested expression tests
+
+# Nested if in else branch
+@a = 5
+@r1 = "big" if a > 10 else ("medium" if a > 3 else "small")
+*echo(r1)
+
+# ( on separate lines with if expression
+@r2 = (
+  "five" if a == 5
+  else "three" if a == 3
+  else "other"
+)
+*echo(r2)
+
+# Nested if — both branches are expressions
+@r3 = ("inner-true" if false else "inner-false") if true else "outer-false"
+*echo(r3)
+
+# Double nesting
+@r4 = "big" if a > 10 else (("medium-high" if a > 4 else "medium-low") if a > 3 else "small")
+*echo(r4)

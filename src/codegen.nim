@@ -219,6 +219,14 @@ proc inferCType(g: CodeGen, e: Expr): string =
             return f.ctype
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
+  if e of IfExpr:
+    return g.inferCType(IfExpr(e).value)
+  if e of CaseExpr:
+    let ce = CaseExpr(e)
+    if ce.branches.len > 0:
+      return g.inferCType(ce.branches[0].value)
+    if ce.elseValue != nil:
+      return g.inferCType(ce.elseValue)
   return "int64_t"
 
 proc ensureOptionType(g: var CodeGen, valType, optType: string)
@@ -227,6 +235,7 @@ proc ensureOptionType(g: var CodeGen, valType, optType: string)
 
 proc genExpr(g: var CodeGen, e: Expr)
 proc genStmt*(g: var CodeGen, s: Stmt)
+proc genCondExpr(g: var CodeGen, e: Expr)
 
 proc genEchoArg(g: var CodeGen, e: Expr) =
   if e of BoolLitExpr:
@@ -651,6 +660,55 @@ proc genExpr(g: var CodeGen, e: Expr) =
         g.emit("." & fields[i].name & " = ")
       g.genExpr(arg.value)
     g.emit("})")
+  elif e of IfExpr:
+    let ie = IfExpr(e)
+    # value if cond else elseValue → (cond) ? (value) : (elseValue)
+    g.emit("("); g.genCondExpr(ie.cond); g.emit(") ? (")
+    g.genExpr(ie.value); g.emit(") : (")
+    g.genExpr(ie.elseValue); g.emit(")")
+  elif e of CaseExpr:
+    let ce = CaseExpr(e)
+    # Determine type context for comparison
+    var enumType = ""
+    var resultType = ""
+    if ce.expr of IdentExpr:
+      let ct = g.varCType(IdentExpr(ce.expr).name)
+      if ct in g.enumNames: enumType = ct
+      elif ct.endsWith("_Result"): resultType = ct
+    elif ce.expr of FieldAccessExpr:
+      let fa = FieldAccessExpr(ce.expr)
+      if fa.expr of IdentExpr:
+        let objType = g.varCType(IdentExpr(fa.expr).name)
+        if objType.len > 0 and objType in g.variantInfo:
+          let vi = g.variantInfo[objType]
+          if fa.field == vi.tagName:
+            enumType = vi.tagType
+    # Generate nested ternary — last branch becomes fallback (exhaustive)
+    let lastIdx = ce.branches.len - 1
+    for i, b in ce.branches:
+      if i == lastIdx and ce.elseValue == nil:
+        # Last branch without else — use as fallback
+        g.emit("("); g.genExpr(b.value); g.emit(")")
+      else:
+        g.emit("(")
+        if resultType.len > 0:
+          g.emit("("); g.genExpr(ce.expr); g.emit(".kind == ")
+          case b.pattern.kind
+          of patOk: g.emit(resultType & "_Ok")
+          of patVariant: g.emit(resultType & "_" & b.pattern.name)
+          else: g.emit("/* unsupported pattern */")
+          g.emit(")")
+        elif enumType.len > 0:
+          g.emit("("); g.genExpr(ce.expr); g.emit(" == ")
+          g.emit(enumType & "_" & b.pattern.name)
+          g.emit(")")
+        else:
+          g.emit("("); g.genExpr(ce.expr); g.emit(" == ")
+          g.emit(b.pattern.name)
+          g.emit(")")
+        g.emit(") ? ("); g.genExpr(b.value); g.emit(") : ")
+    if ce.elseValue != nil:
+      g.emit("("); g.genExpr(ce.elseValue); g.emit(")")
   else:
     g.emit("/* expr not implemented */")
 
@@ -700,14 +758,17 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
                 else: "int64_t"
     g.varTypes[d.name] = ctype
     g.emitIndent()
-    case d.modifier
-    of declDefault, declConst:
-      g.emit("const " & ctype & " " & d.name & " = ")
-    of declMut:
-      g.emit(ctype & " " & d.name & " = ")
-    if d.value != nil: g.genExpr(d.value)
-    else: g.emit("0")
-    g.emit(";\n")
+    if d.value == nil:
+      # Declaration without value: @x int — assigned later
+      g.emit(ctype & " " & d.name & ";\n")
+    else:
+      case d.modifier
+      of declDefault, declConst:
+        g.emit("const " & ctype & " " & d.name & " = ")
+      of declMut:
+        g.emit(ctype & " " & d.name & " = ")
+      g.genExpr(d.value)
+      g.emit(";\n")
 
   elif s of CompoundAssignStmt:
     let ca = CompoundAssignStmt(s)

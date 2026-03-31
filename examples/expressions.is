@@ -1,0 +1,52 @@
+# Expression forms — value if cond else alt, case without colons
+
+# Inline if expression
+@x = "yes" if true else "no"
+*echo(x)
+
+# If expression with comparison
+@status = "ok" if 200 == 200 else "error"
+*echo(status)
+
+# Multiline if expression in ()
+@a = 5
+@grade = (
+  "big" if a > 10
+  else "medium" if a > 3
+  else "small"
+)
+*echo(grade)
+
+# Case expression (inline)
+@Color! enum:
+  @red, @green, @blue
+
+@c = Color.red
+@name = case c of red "Red" of green "Green" of blue "Blue"
+*echo(name)
+
+# Multiline case expression in ()
+@label = (case c
+  of red "RED"
+  of green "GREEN"
+  of blue "BLUE")
+*echo(label)
+
+# Nesting — if inside else
+@r = "high" if a > 10 else ("mid" if a > 3 else "low")
+*echo(r)
+
+# Declaration without value — assign later
+@found int
+@search for @i in 0..5:
+  if i == 3:
+    found = i
+    break search
+*echo(found)
+
+# result with if expression in function
+@classify! func(@n int) ok view[Str]:
+  result = "positive" if n > 0 else "non-positive"
+
+*echo(classify(42))
+*echo(classify(0))

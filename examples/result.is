@@ -18,7 +18,7 @@ if not r:
 
 # case
 @r2 = divide(10, 0)
-case r2:
+caseblock r2:
   of ok:
     *echo(r2.get())
   of DivError:

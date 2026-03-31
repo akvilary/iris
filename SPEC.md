@@ -112,20 +112,30 @@ else:
 The colon `:` distinguishes statements (blocks) from expressions (values).
 No colon = expression, returns a value. Colon = statement, opens a block.
 
-### Expression forms (no colons, return values)
+### if expression — value if condition else alternative
 
 ```
-# Inline if expression:
-@x = if condition "yes" else "no"
+# Inline:
+@x = "yes" if condition else "no"
 
-# Inline case expression:
+# Chaining (no elif needed):
+@grade = "A" if score > 90 else "B" if score > 80 else "C"
+
+# Multiline — wrap in ():
+@status = (
+  "ok" if code == 200
+  else "not found" if code == 404
+  else "error"
+)
+```
+
+### case expression — pattern matching as expression
+
+```
+# Inline:
 @name = case color of red "Red" of green "Green" of blue "Blue"
 
-# Multiline expressions — wrap in ():
-@status = (if code == 200 "ok"
-  elif code == 404 "not found"
-  else "error")
-
+# Multiline — wrap in ():
 @name = (case color
   of red "Red"
   of green "Green"
@@ -536,7 +546,7 @@ No annotations needed. Compiler applies simple rules:
 
 # Rule 3 — multiple borrows, tied to all:
 @longest func(@x view[Str], @y view[Str]) ok view[Str]:
-  result = if x.len > y.len x else y
+  result = x if x.len > y.len else y
   # compiler: result tied to both x AND y
 
 @a = "hello"
@@ -1022,7 +1032,7 @@ the data it points to. No dangling pointers, no use-after-free:
 
 # OK — both params, result tied to both (rule 3)
 @longest func(@x view[Str], @y view[Str]) ok view[Str]:
-  result = if x.len > y.len x else y
+  result = x if x.len > y.len else y
 
 # COMPILE ERROR — local Str dies, view would dangle
 @bad func() ok view[Str]:
