@@ -397,6 +397,30 @@ Return value is set explicitly:
 
 Compiler verifies that `result` is set on all execution paths.
 
+### Declaration without initialization
+
+Variables can be declared without a value — assigned later:
+
+```
+@x int
+@u User
+
+# Compiler verifies assignment before first use on all paths:
+if condition:
+  x = 42
+else:
+  x = 0
+*echo(x)            # OK — assigned on all paths
+
+@y int
+if condition:
+  y = 1
+*echo(y)            # ERROR: y may not be assigned (missing else)
+```
+
+No zero-initialization — uninitialized variables have no default value.
+Works the same for primitives and objects (like Rust, unlike Nim/Go).
+
 ## Memory Model
 
 Every variable lives until the end of its scope (function or block).
