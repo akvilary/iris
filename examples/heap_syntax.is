@@ -1,6 +1,6 @@
 # Unified ~ heap syntax demo
 
-# ~"..." → Str (owned string)
+# ~"..." → String (owned string)
 @name = ~"Andrey"
 *echo(name)
 

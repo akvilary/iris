@@ -1,14 +1,14 @@
 # Concepts demo
 
 @Printable concept:
-  @toString func(@self) ok view[Str]
+  @toString func(@self) ok str
 
 @User object:
-  @name Str
+  @name String
   @age int
 
 # User satisfies Printable — has toString
-@toString func(@self User) ok view[Str]:
+@toString func(@self User) ok str:
   result = "user"
 
 # Generic with concept constraint

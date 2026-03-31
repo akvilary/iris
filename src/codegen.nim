@@ -24,6 +24,7 @@ type
     activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
     okTypes*: seq[string]  # Ok types already emitted
     fnReturnTypes*: Table[string, string]  # func name -> C return type
+    fnParamTypes*: Table[string, seq[string]]  # func name -> param C types
     inResultFunc: bool    # inside a function with error types
     currentResultName: string  # e.g. "divide_Result"
     moduleName: string    # current module name (empty = main)
@@ -70,7 +71,8 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
     of "float", "float64": "double"
     of "float32": "float"
     of "bool": "bool"
-    of "Str": "iris_Str"
+    of "str": "iris_str"  # static ref — typedef for iris_view_String
+    of "String": "iris_String"
     of "natural": "uint64_t"
     of "rune": "int32_t"
     else: n
@@ -87,6 +89,35 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
 
 proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
+
+proc cTypeToIris(g: CodeGen, ct: string): string =
+  ## Convert C type name back to Iris type name for error messages.
+  case ct
+  of "iris_str": "str"
+  of "iris_view_String": "view[String]"
+  of "iris_String": "String"
+  of "int64_t": "int"
+  of "double": "float"
+  of "bool": "bool"
+  of "int32_t": "rune"
+  of "uint64_t": "uint"
+  else: ct
+
+proc isAssignable(g: CodeGen, fromType, toType: string): bool =
+  ## Check if fromType can be assigned to toType.
+  ## Permissive by default — only rejects known incompatible string pairs.
+  if fromType == toType: return true
+  # str → view[String]: OK (static ref is a valid view)
+  if fromType == "iris_str" and toType == "iris_view_String": return true
+  # String → view[String]: OK (owned buffer can be viewed)
+  if fromType == "iris_String" and toType == "iris_view_String": return true
+  # Explicit rejections — known incompatible string pairs:
+  if toType == "iris_str" and fromType in ["iris_view_String", "iris_String"]:
+    return false  # view[String]/String → str: NO
+  if toType == "iris_String" and fromType in ["iris_str", "iris_view_String"]:
+    return false  # str/view[String] → String: NO (must use constructor)
+  # All other type pairs — allow (full type system will catch later)
+  return true
 
 proc isGenericParam(params: seq[GenericParam], name: string): bool =
   for p in params:
@@ -133,7 +164,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
     let ct = g.varCType(IdentExpr(e).name)
     case ct
     of "const char*": return ("%s", false)
-    of "iris_view_Str", "iris_Str": return ("%.*s", false)
+    of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
     of "bool": return ("%s", false)
     of "double", "float": return ("%g", false)
     else: return ("%lld", true)
@@ -148,13 +179,13 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
             case f.ctype
             of "double", "float": return ("%g", false)
             of "const char*": return ("%s", false)
-            of "iris_view_Str", "iris_Str": return ("%.*s", false)
+            of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
             of "bool": return ("%s", false)
             else: return ("%lld", true)
   # Fallback — use inferCType for any expression (including CallExpr)
   let ct = g.inferCType(e)
   case ct
-  of "iris_view_Str", "iris_Str": return ("%.*s", false)
+  of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
   of "bool": return ("%s", false)
   of "double", "float": return ("%g", false)
   else: return ("%lld", true)
@@ -162,8 +193,8 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
 proc inferCType(g: CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
-  if e of StringLitExpr or e of StringInterpExpr: return "iris_view_Str"
-  if e of StrLitExpr or e of StrInterpExpr: return "iris_Str"
+  if e of StringLitExpr or e of StringInterpExpr: return "iris_str"
+  if e of StrLitExpr or e of StrInterpExpr: return "iris_String"
   if e of HashTableLitExpr: return "iris_HashTable"
   if e of HashSetLitExpr: return "iris_HashSet"
   if e of HeapAllocExpr:
@@ -185,7 +216,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
         return "int64_t"  # simplified
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
-      if name == "Str": return "iris_Str"
+      if name == "String": return "iris_String"
       if name == "some" and c.args.len == 1:
         return "iris_Option_" & g.inferCType(c.args[0].value)
       if name == "none":
@@ -244,7 +275,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     let ct = g.varCType(name)
     if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-    elif ct in ["iris_view_Str", "iris_Str"]: g.emit("(int)" & name & ".len, " & name & ".data")
+    elif ct in ["iris_str", "iris_view_String", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
     else: g.genExpr(e)
   elif e of DollarExpr:
     let inner = DollarExpr(e).expr
@@ -252,7 +283,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
       let name = IdentExpr(inner).name
       let ct = g.varCType(name)
       if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-      elif ct in ["iris_view_Str", "iris_Str"]: g.emit("(int)" & name & ".len, " & name & ".data")
+      elif ct in ["iris_str", "iris_view_String", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
       elif ct == "const char*": g.emit(name)
       else:
         for en in g.enumNames:
@@ -300,7 +331,7 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     let ct = g.inferCType(e)
     # Non-trivial expression returning string — use temp variable
     # (IdentExpr is handled in genEchoArg, literals handled above)
-    if ct in ["iris_view_Str", "iris_Str"] and not (e of IdentExpr):
+    if ct in ["iris_str", "iris_view_String", "iris_String"] and not (e of IdentExpr):
       g.emit("{ " & ct & " __echo_tmp = ")
       g.genExpr(e)
       g.emit("; printf(\"%.*s\\n\", (int)__echo_tmp.len, __echo_tmp.data); }")
@@ -315,9 +346,9 @@ proc genExpr(g: var CodeGen, e: Expr) =
   if e of IntLitExpr: g.emit($IntLitExpr(e).val)
   elif e of FloatLitExpr: g.emit($FloatLitExpr(e).val)
   elif e of StringLitExpr:
-    g.emit("iris_view_Str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
+    g.emit("iris_view_String_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
   elif e of StrLitExpr:
-    g.emit("iris_Str_from(\"" & escapeC(StrLitExpr(e).val) & "\")")
+    g.emit("iris_String_from(\"" & escapeC(StrLitExpr(e).val) & "\")")
   elif e of StrInterpExpr:
     var fmt = ""
     var exprs: seq[Expr]
@@ -328,7 +359,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
         let (f, _) = g.printfFormat(p.expr)
         fmt.add(f)
         exprs.add(p.expr)
-    g.emit("iris_Str_fmt(\"" & fmt & "\"")
+    g.emit("iris_String_fmt(\"" & fmt & "\"")
     for ex in exprs:
       let (_, needsCast) = g.printfFormat(ex)
       g.emit(", ")
@@ -384,11 +415,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
       if name == "echo":
         g.genEcho(c.args); return
       # Str("literal") or Str(view) → owned string
-      if name == "Str" and c.args.len == 1:
+      if name == "String" and c.args.len == 1:
         if c.args[0].value of StringLitExpr:
-          g.emit("iris_Str_from(\"" & escapeC(StringLitExpr(c.args[0].value).val) & "\")")
+          g.emit("iris_String_from(\"" & escapeC(StringLitExpr(c.args[0].value).val) & "\")")
         else:
-          g.emit("iris_Str_from_view(")
+          g.emit("iris_String_from_view(")
           g.genExpr(c.args[0].value)
           g.emit(")")
         return
@@ -536,6 +567,19 @@ proc genExpr(g: var CodeGen, e: Expr) =
           g.genExpr(arg.value)
         g.emit(")")
         return
+    # Type check arguments against parameter types
+    if c.fn of IdentExpr:
+      let fname = IdentExpr(c.fn).name
+      if fname in g.fnParamTypes:
+        let paramTypes = g.fnParamTypes[fname]
+        for i, arg in c.args:
+          if i < paramTypes.len:
+            let argType = g.inferCType(arg.value)
+            if not g.isAssignable(argType, paramTypes[i]):
+              raise newException(ValueError,
+                "error: type mismatch in argument " & $(i+1) & " of '" & fname &
+                "' — expected '" & g.cTypeToIris(paramTypes[i]) &
+                "', got '" & g.cTypeToIris(argType) & "'")
     g.genExpr(c.fn); g.emit("(")
     for i, arg in c.args:
       if i > 0: g.emit(", ")
@@ -756,6 +800,14 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     let ctype = if d.typeAnn != nil: g.typeToCStr(d.typeAnn)
                 elif d.value != nil: g.inferCType(d.value)
                 else: "int64_t"
+    # Type compatibility check when annotation is present and value is given
+    if d.typeAnn != nil and d.value != nil:
+      let valType = g.inferCType(d.value)
+      if not g.isAssignable(valType, ctype):
+        raise newException(ValueError,
+          "error: type mismatch in declaration '@" & d.name &
+          "' — expected '" & g.cTypeToIris(ctype) &
+          "', got '" & g.cTypeToIris(valType) & "'")
     g.varTypes[d.name] = ctype
     g.emitIndent()
     if d.value == nil:
@@ -946,6 +998,13 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ObjectDeclStmt:
     let o = ObjectDeclStmt(s)
+    # Check: view[T] not allowed in object fields
+    for f in o.fields:
+      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+        raise newException(ValueError,
+          "error: view[" & NamedType(GenericType(f.typeAnn).args[0]).name &
+          "] cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
+          "\n  in field '@" & f.name & "' of object '" & o.name & "'")
     var allFields: seq[tuple[name, ctype: string]]
     if o.parent.len > 0 and o.parent in g.typeFields:
       allFields = g.typeFields[o.parent]
@@ -996,6 +1055,13 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ErrorDeclStmt:
     let e = ErrorDeclStmt(s)
+    # Check: view[T] not allowed in error fields
+    for f in e.fields:
+      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+        raise newException(ValueError,
+          "error: view[" & NamedType(GenericType(f.typeAnn).args[0]).name &
+          "] cannot be stored in error fields — use 'str' (static) or 'String' (owned) instead" &
+          "\n  in field '@" & f.name & "' of error '" & e.name & "'")
     g.errorNames.add(e.name)
     var allFields: seq[tuple[name, ctype: string]]
     g.emit("typedef struct {\n")
@@ -1203,37 +1269,40 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("#include <string.h>\n")
   g.emit("#include <stdlib.h>\n")
   g.emit("#include <stdarg.h>\n\n")
-  g.emit("// view[Str] — immutable view (pointer + length)\n")
-  g.emit("typedef struct { const char* data; size_t len; } iris_view_Str;\n")
-  g.emit("static inline iris_view_Str iris_view_Str_from(const char* s) {\n")
-  g.emit("  return (iris_view_Str){s, strlen(s)};\n")
+  g.emit("// view[String] — immutable view (pointer + length)\n")
+  g.emit("typedef struct { const char* data; size_t len; } iris_view_String;\n")
+  g.emit("static inline iris_view_String iris_view_String_from(const char* s) {\n")
+  g.emit("  return (iris_view_String){s, strlen(s)};\n")
   g.emit("}\n\n")
-  g.emit("// Str — owned heap buffer (pointer + length + capacity)\n")
-  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_Str;\n")
-  g.emit("static inline iris_Str iris_Str_from(const char* s) {\n")
+  g.emit("// str — static string reference (same layout as view[String])\n")
+  g.emit("typedef iris_view_String iris_str;\n")
+  g.emit("#define iris_str_from iris_view_String_from\n\n")
+  g.emit("// String — owned heap buffer (pointer + length + capacity)\n")
+  g.emit("typedef struct { char* data; size_t len; size_t cap; } iris_String;\n")
+  g.emit("static inline iris_String iris_String_from(const char* s) {\n")
   g.emit("  size_t len = strlen(s);\n")
   g.emit("  char* data = (char*)malloc(len + 1);\n")
   g.emit("  memcpy(data, s, len + 1);\n")
-  g.emit("  return (iris_Str){data, len, len};\n")
+  g.emit("  return (iris_String){data, len, len};\n")
   g.emit("}\n")
-  g.emit("static inline iris_Str iris_Str_from_view(iris_view_Str v) {\n")
+  g.emit("static inline iris_String iris_String_from_view(iris_view_String v) {\n")
   g.emit("  char* data = (char*)malloc(v.len + 1);\n")
   g.emit("  memcpy(data, v.data, v.len);\n")
   g.emit("  data[v.len] = '\\0';\n")
-  g.emit("  return (iris_Str){data, v.len, v.len};\n")
+  g.emit("  return (iris_String){data, v.len, v.len};\n")
   g.emit("}\n")
-  g.emit("static inline iris_Str iris_Str_fmt(const char* fmt, ...) {\n")
+  g.emit("static inline iris_String iris_String_fmt(const char* fmt, ...) {\n")
   g.emit("  va_list a1, a2;\n")
   g.emit("  va_start(a1, fmt); va_copy(a2, a1);\n")
   g.emit("  int len = vsnprintf(NULL, 0, fmt, a1); va_end(a1);\n")
   g.emit("  char* data = (char*)malloc(len + 1);\n")
   g.emit("  vsnprintf(data, len + 1, fmt, a2); va_end(a2);\n")
-  g.emit("  return (iris_Str){data, (size_t)len, (size_t)len};\n")
+  g.emit("  return (iris_String){data, (size_t)len, (size_t)len};\n")
   g.emit("}\n\n")
 
   # Common Option types
   g.emit("// Option types\n")
-  for t in ["int64_t", "double", "bool", "iris_view_Str"]:
+  for t in ["int64_t", "double", "bool", "iris_view_String"]:
     let optName = "iris_Option_" & t
     g.emit("typedef struct { bool has; " & t & " value; } " & optName & ";\n")
     g.okTypes.add(optName)
@@ -1291,10 +1360,12 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
           g.emit("}; } " & resultName & ";\n")
         g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
         g.fnReturnTypes[f.name] = resultName
+        g.fnParamTypes[f.name] = f.params.mapIt(g.typeToCStr(it.typeAnn))
       else:
         let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
         g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
         g.fnReturnTypes[f.name] = ret
+        g.fnParamTypes[f.name] = f.params.mapIt(g.typeToCStr(it.typeAnn))
   g.emit("\n")
 
   # Functions (non-generic)

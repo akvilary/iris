@@ -1,2 +1,2 @@
-@greet! func(@name view[Str]) ok view[Str]:
+@greet! func(@name view[String]) ok view[String]:
   result = name

@@ -2,17 +2,17 @@
 
 # Simple error
 @DivError! error:
-  @message Str
+  @message String
 
 # Grouped error with variants
 @HttpErrorKind! enum:
   @notFound, @serverError, @timeout
 
 @HttpError! error:
-  @message Str
+  @message String
   case @kind HttpErrorKind:
     of notFound:
-      @path Str
+      @path String
     of serverError:
       @code int
     of timeout:

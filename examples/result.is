@@ -1,7 +1,7 @@
 # Error handling with result
 
 @DivError! error:
-  @message Str
+  @message String
 
 @divide! func(@a int, @b int) ok int else DivError:
   if b == 0:

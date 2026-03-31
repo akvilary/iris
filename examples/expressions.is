@@ -45,7 +45,7 @@
 *echo(found)
 
 # result with if expression in function
-@classify! func(@n int) ok view[Str]:
+@classify! func(@n int) ok str:
   result = "positive" if n > 0 else "non-positive"
 
 *echo(classify(42))
