@@ -17,7 +17,7 @@ with Rust-level memory safety. "Safe Nim."
 - No semicolons
 - No curly braces for blocks
 - Naming convention: pascalCase
-- Explicit return values: `result` in functions and blocks (belongs to nearest scope)
+- Explicit return values: `result` in functions only
 - No mandatory `main` function — top-level code runs directly
 
 ## Entry Point
@@ -47,7 +47,7 @@ when isMain:
 
 ## Loops
 
-Only `while` and `for`. No `loop`. Named loops via `label.
+Only `while` and `for`. No `loop`. Named loops via `@name`.
 
 A loop is a block — spawns are cancelled and memory is freed on exit.
 
@@ -77,29 +77,28 @@ for @i in 0..<10:
       continue inner     # skip to next for iteration
 ```
 
-### Loop as expression
+### Loops do not return values
 
-Loops can return values via `result`. If the loop may complete without
-`break`, an `else` clause is required by the compiler:
+Loops cannot be assigned to variables. To get a value from a loop,
+declare a variable before and assign inside:
 
 ```
-# while true — always breaks, result always set:
-@input = @loop while true:
+# Declare before, assign inside:
+@input Str
+@loop while true:
   @line = readLine()
-    case line:
-      Ok:
-        result = line
-        break loop
-    else:
-      continue
+  if line:
+    input = line.get()
+    break loop
 
-# for — may complete without break, else required:
-@found = @search for @item in list:
+# Search pattern — declare before loop:
+@found Item
+@search for @item in list:
   if item.matches(query):
-    result = item
+    found = item
     break search
 else:
-  result = defaultItem
+  found = defaultItem
 
 # Spawns inside loop are cancelled on break:
 @loop for @url in urls:
@@ -108,28 +107,51 @@ else:
     break loop          # all spawns cancelled, memory freed
 ```
 
-## Expressions
+## Expressions vs Statements
 
-`if`/`elif`/`else` and `case` are expressions — they return values:
+The colon `:` distinguishes statements (blocks) from expressions (values).
+No colon = expression, returns a value. Colon = statement, opens a block.
+
+### Expression forms (no colons, return values)
 
 ```
-# Inline if:
-@x = if condition: "yes" else: "no"
+# Inline if expression:
+@x = if condition "yes" else "no"
 
-# Multiline if:
-@status = if code == 200:
-  "ok"
-elif code == 404:
-  "not found"
+# Inline case expression:
+@name = case color of red "Red" of green "Green" of blue "Blue"
+
+# Multiline expressions — wrap in ():
+@status = (if code == 200 "ok"
+  elif code == 404 "not found"
+  else "error")
+
+@name = (case color
+  of red "Red"
+  of green "Green"
+  of blue "Blue")
+```
+
+### Statement forms (colons, blocks, no return value)
+
+```
+# if statement:
+if condition:
+  doSomething()
 else:
-  "error"
+  doOtherThing()
 
-# case as expression:
-@name = case color:
-  of red: "Red"
-  of green: "Green"
-  of blue: "Blue"
+# caseblock — case with blocks:
+caseblock color:
+  of red:
+    paintRed()
+    logColor()
+  of green:
+    paintGreen()
 ```
+
+`case` is always an expression. `caseblock` is always a statement with blocks.
+Both `case` and `caseblock` must be exhaustive (all variants or `else`).
 
 ## Truthiness
 
@@ -514,7 +536,7 @@ No annotations needed. Compiler applies simple rules:
 
 # Rule 3 — multiple borrows, tied to all:
 @longest func(@x view[Str], @y view[Str]) ok view[Str]:
-  result = if x.len > y.len: x else: y
+  result = if x.len > y.len x else y
   # compiler: result tied to both x AND y
 
 @a = "hello"
@@ -879,7 +901,7 @@ n = n - 10               # ERROR: natural cannot be negative
 ### Option
 
 No null/nil in Iris. `Option[T]` represents a value that may or may not exist.
-Works with `?`, `case`, and `else` — same patterns as error handling.
+Works with `?`, `caseblock`, and `else` — same patterns as error handling.
 
 ```
 # Creating
@@ -887,7 +909,7 @@ Works with `?`, `case`, and `else` — same patterns as error handling.
 @b = none(int)           # Option[int] without value
 
 # Pattern matching
-case a:
+caseblock a:
   of some: *echo(a.get())           # 42
   of none: *echo("nothing")
 
@@ -1000,7 +1022,7 @@ the data it points to. No dangling pointers, no use-after-free:
 
 # OK — both params, result tied to both (rule 3)
 @longest func(@x view[Str], @y view[Str]) ok view[Str]:
-  result = if x.len > y.len: x else: y
+  result = if x.len > y.len x else y
 
 # COMPILE ERROR — local Str dies, view would dangle
 @bad func() ok view[Str]:
@@ -1131,19 +1153,19 @@ Two definitions — explicit and clear:
       discard
 
 @area! func(@s Shape) ok float:
-  result = case s.kind:
-    of circle: PI * s.radius * s.radius
-    of rect: s.w * s.h
-    of point: 0.0
+  result = (case s.kind
+    of circle PI * s.radius * s.radius
+    of rect s.w * s.h
+    of point 0.0)
 ```
 
-### case/of — pattern matching
+### caseblock/of — pattern matching with blocks
 
 Exhaustive by default. Compiler checks all cases are handled.
 
 #### Enums — short member names
 
-Inside `case`, use **member name only** — no full path needed:
+Inside `caseblock`, use **member name only** — no full path needed:
 
 ```
 @Color! enum:
@@ -1151,7 +1173,7 @@ Inside `case`, use **member name only** — no full path needed:
 
 @c = Color.red
 
-case c:
+caseblock c:
   of red:
     *echo("red!")
   of green:
@@ -1163,7 +1185,7 @@ case c:
 Partial match with `else`:
 
 ```
-case c:
+caseblock c:
   of red: *echo("red!")
   else: discard            # covers green, blue
 ```
@@ -1171,20 +1193,20 @@ case c:
 Without `else` and without all members → **compile error**:
 
 ```
-case c:
+caseblock c:
   of red: *echo("red!")
   # ERROR: non-exhaustive — green, blue not handled
 ```
 
 #### Union types — match on type
 
-`case/of` works on union types. All types must be covered:
+`caseblock/of` works on union types. All types must be covered:
 
 ```
 # Response from fetch is: Data else ServerError else NetworkError
 
 @resp = fetch("http://api.com")
-case resp:
+caseblock resp:
   of ok:
     @data = resp.get()
     *echo(data)
@@ -1197,7 +1219,7 @@ case resp:
 Partial match with `else`:
 
 ```
-case resp:
+caseblock resp:
   of ok:
     @data = resp.get()
   else:
@@ -1206,7 +1228,7 @@ case resp:
 
 #### Rules
 
-- `case` must always be exhaustive (all cases or `else`)
+- `caseblock` must always be exhaustive (all cases or `else`)
 - No `_:` wildcard — use `else:` instead
 - `discard` to explicitly ignore: `else: discard`
 - Enum members use short names (not `Color.red`, just `red`)
@@ -1439,43 +1461,54 @@ iris expand --macro=html     # show what a specific macro generated
 
 ## Block — universal construct
 
-`block` is the single building block for control flow, concurrency, scoping, and values.
-Behavior is determined by contents, not by different keywords.
+`block` is a scoping and control flow construct. It does not return values.
+Any indentation creates a scope — memory is freed on block exit.
 
-### Control Flow — named blocks and break
-
-```
-# Exit from nested loops
-*block `search:
-  for item in list1:
-    for item2 in list2:
-      if item == item2:
-        break `search         # exit both loops
-  *echo("not found")
-
-# Nested named blocks
-*block `outer:
-  for i in 0..100:
-    block `inner:
-      if i == 50:
-        break `outer          # exit everything
-      if i % 2 == 0:
-        break `inner          # skip this block
-      process(i)
-```
-
-### Block as expression (returns a value)
+### Unnamed blocks
 
 ```
-@count = block `b:
+# Simple scope — memory freed on exit:
+block:
+  @tmp = expensiveComputation()
+  process(tmp)
+# <- tmp freed here
+```
+
+### Named blocks and break
+
+```
+# Named block — early exit from complex logic:
+@validate block:
+  if not user.isActive:
+    break validate
+  if not user.hasPermission("admin"):
+    break validate
+  grantAccess(user)
+
+# Named block — group related setup, bail on failure:
+@setup block:
+  @cfg = loadConfig()
+  if not cfg:
+    *echo("no config, using defaults")
+    break setup
+  @db = connect(cfg.get().dbUrl)
+  if not db:
+    *echo("no db connection")
+    break setup
+  migrate(db.get())
+```
+
+### Blocks do not return values
+
+To get a value out of a block, declare a variable before and assign inside:
+
+```
+@count int
+block:
   if users.isEmpty:
-    result = 0
-    break `b
-  result = users.len
-
-# Or simpler:
-@status = block `b:
-  result = if isReady: "ok" else: "waiting"
+    count = 0
+  else:
+    count = users.len
 ```
 
 ### Thread Safety
@@ -1704,7 +1737,7 @@ No automatic unwrapping — always use `.get()` to extract Ok value.
 ### Declaring errors
 
 Error types use the `error` keyword (not `object`). This tells the compiler
-the type is an error — falsy in conditions, assignable to `result`, usable with `case`.
+the type is an error — falsy in conditions, assignable to `result`, usable with `caseblock`.
 
 ```
 # Simple errors
@@ -1798,11 +1831,11 @@ if not cfg:
   @cfg = Config.default()
 ```
 
-#### 3. `case` — pattern match on all cases
+#### 3. `caseblock` — pattern match on all cases
 
 ```
 @response = fetch("http://api.com/data")
-case response:
+caseblock response:
   of ok:
     @data = response.get()
     *echo(data)
@@ -1822,7 +1855,7 @@ case response:
 | `?` | Propagate error to caller |
 | `.get()` | Explicit unwrap of Ok value — always required |
 | `if`/`else` | Check result, handle error inline |
-| `case` | Pattern match on `Ok` and specific error types |
+| `caseblock` | Pattern match on `Ok` and specific error types |
 
 ## Tooling (built into compiler)
 
