@@ -94,7 +94,7 @@ declare a variable before and assign inside:
 # Search pattern — declare before loop:
 @found Item
 @search for @item in list:
-  if item.matches(query):
+  if item.id == targetId:
     found = item
     break search
 else:
@@ -102,7 +102,7 @@ else:
 
 # Spawns inside loop are cancelled on break:
 @loop for @url in urls:
-  spawn: fetch(url)
+  spawn fetch(url)
   if timeout:
     break loop          # all spawns cancelled, memory freed
 ```
@@ -1564,29 +1564,10 @@ If data is passed to a `spawn`, no other spawn can access it mutably.
 ```
 @data mut = ~[1, 2, 3]
 
-# COMPILE ERROR — two spawns cannot mutate the same data:
-block:
-  spawn:
-    data.add(4)          # ERROR: mutable borrow conflict
-  spawn:
-    data.add(5)          # ERROR: data already borrowed
-
-# OK — communicate via channels instead of shared memory:
-@ch = channel[int](2)
-block:
-  spawn:
-    ch.send(4)
-  spawn:
-    ch.send(5)
-
-# OK — each spawn gets its own data:
-block:
-  spawn:
-    @local mut = ~[1, 2]
-    local.add(3)
-  spawn:
-    @local mut = ~[4, 5]
-    local.add(6)
+# OK — each spawn returns its own result:
+@a = spawn fetch("url1")
+@b = spawn fetch("url2")
+@buf = ~[a.get(), b.get()]
 ```
 
 | Problem | Prevented? | How |
@@ -1777,7 +1758,7 @@ Return type is the success type, errors listed after `else`:
 `ok T else Error1, Error2`. All possible errors must be listed.
 Errors are returned via `result = Error(...)` — same mechanism as success values.
 No `raise` keyword — one unified `result` mechanism for both paths.
-No automatic unwrapping — always use `.get()` to extract Ok value.
+No automatic unwrapping — always use `.get()` to extract ok value.
 
 ### Declaring errors
 
@@ -1830,12 +1811,12 @@ The compiler distinguishes by type — `error` types vs regular values:
   if b == 0:
     result = DivError(message=~"division by zero")
     return                 # early exit with error
-  result = a / b           # compiler wraps in Ok
+  result = a / b           # compiler wraps in ok
 
 @readConfig! func(@path view[String]) ok Config else IoError, ParseError:
   @raw = fs.read(path)?              # ? propagates IoError up
   @parsed = json.parse(raw)?         # ? propagates ParseError up
-  result = Config.from(parsed)       # compiler wraps in Ok
+  result = Config.from(parsed)       # compiler wraps in ok
 ```
 
 Compiler checks:
@@ -1898,9 +1879,9 @@ caseblock response:
 |--------|-------------|
 | `result = Error(...)` | Return an error from function |
 | `?` | Propagate error to caller |
-| `.get()` | Explicit unwrap of Ok value — always required |
+| `.get()` | Explicit unwrap of ok value — always required |
 | `if`/`else` | Check result, handle error inline |
-| `caseblock` | Pattern match on `Ok` and specific error types |
+| `caseblock` | Pattern match on `ok` and specific error types |
 
 ## Tooling (built into compiler)
 
