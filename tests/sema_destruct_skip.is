@@ -1,0 +1,9 @@
+# EXPECT OK: underscore skip
+# Underscore skip in destructuring
+@Point tuple:
+  @x int
+  @y int
+
+@p = Point(42, 99)
+(@first, _) = p
+*echo(first)

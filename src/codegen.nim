@@ -36,6 +36,7 @@ type
     typeMethods*: Table[string, seq[tuple[name: string, paramTypes: seq[string], retType: string]]]
     emittedSpecializations*: seq[string]  # already emitted specializations
     pendingSpecializations*: string  # code to emit before main
+    tmpCounter: int  # monotonic counter for unique temp names
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -52,6 +53,10 @@ proc emitIndent(g: var CodeGen) =
 
 proc emitLine*(g: var CodeGen, s: string) =
   g.emitIndent(); g.emit(s); g.emit("\n")
+
+proc nextTmp(g: var CodeGen): string =
+  g.tmpCounter += 1
+  "__destruct_" & $g.tmpCounter
 
 # ── Type mapping ──
 
@@ -821,6 +826,96 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         g.emit(ctype & " " & d.name & " = ")
       g.genExpr(d.value)
       g.emit(";\n")
+
+  elif s of DestructDeclStmt:
+    let dd = DestructDeclStmt(s)
+
+    proc fieldAccessor(g: CodeGen, tmpName, tmpType: string, index: int, fieldName: string): string =
+      ## Build C field access expression for a destructured element.
+      if fieldName.len > 0:
+        return tmpName & "." & fieldName
+      let fields = g.typeFields.getOrDefault(tmpType, @[])
+      if index < fields.len:
+        return tmpName & "." & fields[index].name
+      return tmpName & ".field" & $index
+
+    proc fieldCType(g: CodeGen, tmpType: string, index: int, fieldName: string): string =
+      ## Look up the C type of a tuple/object field by index or name.
+      let fields = g.typeFields.getOrDefault(tmpType, @[])
+      if fieldName.len > 0:
+        for f in fields:
+          if f.name == fieldName: return f.ctype
+      if index < fields.len:
+        return fields[index].ctype
+      return "int64_t"
+
+    proc genDestructPattern(g: var CodeGen, pat: DestructPattern, tmpName, tmpType: string, index: int) =
+      case pat.kind
+      of dpVar:
+        let access = g.fieldAccessor(tmpName, tmpType, index, pat.fieldName)
+        let ct = g.fieldCType(tmpType, index, pat.fieldName)
+        g.varTypes[pat.name] = ct
+        g.emitIndent()
+        case pat.modifier
+        of declDefault, declConst:
+          g.emit("const " & ct & " " & pat.name & " = " & access & ";\n")
+        of declMut:
+          g.emit(ct & " " & pat.name & " = " & access & ";\n")
+      of dpSkip:
+        discard
+      of dpNested:
+        let access = g.fieldAccessor(tmpName, tmpType, index, "")
+        let ct = g.fieldCType(tmpType, index, "")
+        let nestedTmp = g.nextTmp()
+        g.emitIndent()
+        g.emit("const " & ct & " " & nestedTmp & " = " & access & ";\n")
+        for i, child in pat.children:
+          g.genDestructPattern(child, nestedTmp, ct, i)
+
+    # Path A: RHS is a tuple literal — assign directly, no temp needed
+    if dd.value of TupleLitExpr:
+      let tup = TupleLitExpr(dd.value)
+      proc genDirectAssign(g: var CodeGen, pat: DestructPattern, tup: TupleLitExpr) =
+        for i, child in pat.children:
+          case child.kind
+          of dpVar:
+            let elemType = g.inferCType(tup.elems[i].value)
+            g.varTypes[child.name] = elemType
+            g.emitIndent()
+            case child.modifier
+            of declDefault, declConst:
+              g.emit("const " & elemType & " " & child.name & " = ")
+            of declMut:
+              g.emit(elemType & " " & child.name & " = ")
+            g.genExpr(tup.elems[i].value)
+            g.emit(";\n")
+          of dpSkip:
+            discard
+          of dpNested:
+            # Nested element with a tuple literal sub-expression
+            if tup.elems[i].value of TupleLitExpr:
+              g.genDirectAssign(child, TupleLitExpr(tup.elems[i].value))
+            else:
+              # Fall back to temp-based approach for non-literal nested
+              let innerTmp = g.nextTmp()
+              let innerType = g.inferCType(tup.elems[i].value)
+              g.emitIndent()
+              g.emit("const " & innerType & " " & innerTmp & " = ")
+              g.genExpr(tup.elems[i].value)
+              g.emit(";\n")
+              for j, grandchild in child.children:
+                g.genDestructPattern(grandchild, innerTmp, innerType, j)
+      g.genDirectAssign(dd.pattern, tup)
+    else:
+      # Path B: RHS is a call/variable — evaluate into temp, access fields
+      let tmpName = g.nextTmp()
+      let tmpType = g.inferCType(dd.value)
+      g.emitIndent()
+      g.emit("const " & tmpType & " " & tmpName & " = ")
+      g.genExpr(dd.value)
+      g.emit(";\n")
+      for i, child in dd.pattern.children:
+        g.genDestructPattern(child, tmpName, tmpType, i)
 
   elif s of CompoundAssignStmt:
     let ca = CompoundAssignStmt(s)

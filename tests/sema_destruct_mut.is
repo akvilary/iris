@@ -1,0 +1,11 @@
+# EXPECT OK: mutable binding
+# Mutable binding in destructuring
+@Point tuple:
+  @x int
+  @y int
+
+@p = Point(1, 2)
+(@a mut, @b) = p
+a = a + 10
+*echo(a)
+*echo(b)

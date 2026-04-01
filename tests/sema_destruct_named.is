@@ -1,0 +1,10 @@
+# EXPECT OK: named destructuring
+# Named destructuring — bind by field name
+@Pair tuple:
+  @first int
+  @second int
+
+@p = Pair(100, 200)
+(@b = second, @a = first) = p
+*echo(a)
+*echo(b)

@@ -3,7 +3,7 @@
 ## Commands: build, run, tokens, parse, emit
 
 import std/[os, strutils, osproc, tables]
-import token, lexer, ast, parser, codegen
+import token, lexer, ast, parser, sema, codegen
 
 proc compileToAst(source: string): seq[Stmt] =
   var lex = newLexer(source)
@@ -11,6 +11,12 @@ proc compileToAst(source: string): seq[Stmt] =
   let tokens = compilerTokens(allTokens)
   var p = newParser(tokens)
   p.parse()
+
+proc checkSemantics(stmts: seq[Stmt]) =
+  ## Run semantic analysis and raise on errors
+  let errors = analyze(stmts)
+  if errors.len > 0:
+    raise newException(ValueError, errors.join("\n"))
 
 type
   ImportInfo = object
@@ -40,7 +46,11 @@ proc resolveImports(stmts: seq[Stmt], baseDir: string): Table[string, ImportInfo
 
 proc compileToC(source: string, baseDir: string): string =
   let stmts = compileToAst(source)
+  # Semantic analysis before codegen
+  checkSemantics(stmts)
   let modules = resolveImports(stmts, baseDir)
+  for modName, info in modules:
+    checkSemantics(info.stmts)
   var gen = newCodeGen()
 
   # Generate main file
@@ -198,7 +208,7 @@ proc main() =
   let args = commandLineParams()
   if args.len < 2:
     echo "Usage: irisc <command> <file.is>"
-    echo "Commands: build, run, tokens, parse, emit"
+    echo "Commands: build, run, check, tokens, parse, emit"
     quit(1)
 
   let command = args[0]
@@ -223,6 +233,15 @@ proc main() =
       let stmts = compileToAst(source)
       for s in stmts:
         echo repr(s)
+
+    of "check":
+      let stmts = compileToAst(source)
+      let errors = analyze(stmts)
+      if errors.len > 0:
+        for e in errors: echo e
+        quit(1)
+      else:
+        echo "OK"
 
     of "emit":
       let baseDir = parentDir(filename)

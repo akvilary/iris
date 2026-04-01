@@ -1,0 +1,8 @@
+# EXPECT OK: initialized in both branches
+
+@x int
+if true:
+  x = 1
+else:
+  x = 2
+*echo(x)

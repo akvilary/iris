@@ -550,6 +550,57 @@ proc parseBlockBody(P: var Parser): seq[Stmt] =
     P.skipNewlines()
   if P.at(tkDedent): discard P.advance()
 
+# ── Destructuring parsing ──
+
+proc parseDestructPattern(P: var Parser): DestructPattern =
+  ## Parse one element inside a destructuring tuple pattern.
+  if P.at(tkAt):
+    let at = P.parseAtName()
+    var modifier = declDefault
+    if P.at(tkMut):
+      discard P.advance()
+      modifier = declMut
+    elif P.at(tkConst):
+      discard P.advance()
+      modifier = declConst
+    # Named destructuring: @localName = fieldName
+    var fieldName = ""
+    if P.at(tkEq):
+      discard P.advance()
+      fieldName = P.parseIdentName()
+    DestructPattern(kind: dpVar, name: at.name, public: at.public,
+                    modifier: modifier, fieldName: fieldName)
+  elif P.at(tkIdent) and P.current().strVal == "_":
+    discard P.advance()
+    DestructPattern(kind: dpSkip)
+  elif P.at(tkLParen):
+    # Nested: ( pattern, pattern, ... )
+    discard P.advance()
+    var children: seq[DestructPattern]
+    while not P.at(tkRParen) and not P.at(tkEof):
+      children.add(P.parseDestructPattern())
+      if P.at(tkComma): discard P.advance()
+    P.expect(tkRParen)
+    DestructPattern(kind: dpNested, children: children)
+  else:
+    P.error("expected @name, _, or ( in destructuring pattern")
+    nil
+
+proc parseDestructDecl(P: var Parser): Stmt =
+  ## Parse: ( @a, @b ) = expr
+  discard P.advance()  # skip (
+  var children: seq[DestructPattern]
+  while not P.at(tkRParen) and not P.at(tkEof):
+    children.add(P.parseDestructPattern())
+    if P.at(tkComma): discard P.advance()
+  P.expect(tkRParen)
+  P.expect(tkEq)
+  let value = P.parseExpr()
+  DestructDeclStmt(
+    pattern: DestructPattern(kind: dpNested, children: children),
+    value: value
+  )
+
 # ── Statement parsing ──
 
 proc parseDecl(P: var Parser): Stmt =
@@ -990,6 +1041,16 @@ proc parseStmt*(P: var Parser): Stmt =
     discard P.advance()
     DiscardStmt()
   else:
+    # Check for tuple destructuring: ( @name, ... ) = expr
+    if P.at(tkLParen):
+      let saved = P.pos
+      discard P.advance()  # skip (
+      let isDestruct = P.at(tkAt) or
+                       (P.at(tkIdent) and P.current().strVal == "_") or
+                       P.at(tkLParen)
+      P.pos = saved  # restore
+      if isDestruct:
+        return P.parseDestructDecl()
     # Expression, assignment, or compound assignment
     let expr = P.parseExpr()
     if P.at(tkEq):

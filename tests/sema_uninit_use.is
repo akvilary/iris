@@ -1,0 +1,4 @@
+# EXPECT ERROR: used before initialization
+
+@x int
+*echo(x)

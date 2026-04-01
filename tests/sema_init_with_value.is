@@ -1,0 +1,7 @@
+# EXPECT OK: initialized at declaration
+
+@x = 42
+*echo(x)
+
+@y int = 10
+*echo(y)

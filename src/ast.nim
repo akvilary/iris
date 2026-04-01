@@ -30,9 +30,30 @@ type
   EnumValueKind* = enum
     evNone, evInt, evString, evFields
 
+  DestructPatternKind* = enum
+    dpVar       # @name — bind a variable
+    dpSkip      # _     — ignore this position
+    dpNested    # (...) — nested tuple pattern
+
   # Forward declarations
   Expr* = ref object of RootObj
   Stmt* = ref object of RootObj
+
+  DestructPattern* = ref object
+    case kind*: DestructPatternKind
+    of dpVar:
+      name*: string
+      public*: bool
+      modifier*: DeclModifier
+      fieldName*: string    # named destructuring: @q = quotient → fieldName="quotient"
+    of dpSkip:
+      discard
+    of dpNested:
+      children*: seq[DestructPattern]
+
+  DestructDeclStmt* = ref object of Stmt
+    pattern*: DestructPattern   # always dpNested at top level
+    value*: Expr
 
   # ── Expressions ──
 

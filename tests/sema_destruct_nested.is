@@ -1,0 +1,6 @@
+# EXPECT OK: nested destructuring
+# Nested tuple destructuring
+(@a, (@b, @c)) = (1, (2, 3))
+*echo(a)
+*echo(b)
+*echo(c)

@@ -28,12 +28,14 @@ Minimal compiler that can compile basic Iris programs to C.
 - [x] Generics (duck typing at instantiation, monomorphization)
 - [x] Concepts (optional named constraints, compile-time validation)
 - [x] `$` operator for string conversion (partial)
-- [ ] Destructuring
+- [x] Destructuring (positional, named, nested, modifiers, _ skip)
 
 ### Phase 3 — Memory Safety
 
-- [ ] Semantic analyzer (between parser and codegen)
-- [ ] Reject view[T] in object fields and closure captures
+- [x] Semantic analyzer (between parser and codegen)
+- [x] Reject view[T] in object/error/tuple fields
+- [x] Assigned-before-use check (no zero-init)
+- [ ] Reject view[T] in closure captures
 - [ ] Ownership + borrow checker (immutable borrow, mut, own)
 - [ ] Lifetime inference (3 rules, no annotations)
 - [ ] Pool for cyclic references

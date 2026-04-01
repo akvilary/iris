@@ -1,0 +1,7 @@
+# EXPECT ERROR: used before initialization
+# Only initialized in one branch, no else
+
+@x int
+if true:
+  x = 1
+*echo(x)

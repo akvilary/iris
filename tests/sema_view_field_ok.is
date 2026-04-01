@@ -1,0 +1,5 @@
+# EXPECT OK: str in fields is fine (static lifetime)
+
+@Good object:
+  @name str
+  @label str

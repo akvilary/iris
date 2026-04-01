@@ -19,29 +19,31 @@
 
 # Case expression (inline)
 @Color! enum:
-  @red, @green, @blue
+  @Red, @Green, @Blue
 
 @c = Color.red
-@name = case c of red "Red" of green "Green" of blue "Blue"
+@name = case c of Red "Red" of Green "Green" of Blue "Blue"
 *echo(name)
 
 # Multiline case expression in ()
-@label = (case c
-  of red "RED"
-  of green "GREEN"
-  of blue "BLUE")
+@label = (
+  case c
+    of Red "RED"
+    of Green "GREEN"
+    of Blue "BLUE"
+)
 *echo(label)
 
 # Nesting — if inside else
 @r = "high" if a > 10 else ("mid" if a > 3 else "low")
 *echo(r)
 
-# Declaration without value — assign later
+# Declaration without value — assign in both branches
 @found int
-@search for @i in 0..5:
-  if i == 3:
-    found = i
-    break search
+if true:
+  found = 42
+else:
+  found = 0
 *echo(found)
 
 # result with if expression in function

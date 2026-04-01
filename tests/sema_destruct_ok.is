@@ -1,0 +1,10 @@
+# EXPECT OK: basic positional destructuring
+# Basic positional destructuring
+@Point tuple:
+  @x int
+  @y int
+
+@p = Point(10, 20)
+(@a, @b) = p
+*echo(a)
+*echo(b)
