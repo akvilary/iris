@@ -12,9 +12,9 @@ proc compileToAst(source: string): seq[Stmt] =
   var p = newParser(tokens)
   p.parse()
 
-proc checkSemantics(stmts: seq[Stmt]) =
+proc checkSemantics(stmts: seq[Stmt], filename: string = "") =
   ## Run semantic analysis and raise on errors
-  let errors = analyze(stmts)
+  let errors = analyze(stmts, filename)
   if errors.len > 0:
     raise newException(ValueError, errors.join("\n"))
 
@@ -44,13 +44,13 @@ proc resolveImports(stmts: seq[Stmt], baseDir: string): Table[string, ImportInfo
     elif s of FromImportStmt:
       result.resolveModule(FromImportStmt(s).module, FromImportStmt(s).names, baseDir)
 
-proc compileToC(source: string, baseDir: string): string =
+proc compileToC(source: string, baseDir: string, filename: string = ""): string =
   let stmts = compileToAst(source)
   # Semantic analysis before codegen
-  checkSemantics(stmts)
+  checkSemantics(stmts, filename)
   let modules = resolveImports(stmts, baseDir)
   for modName, info in modules:
-    checkSemantics(info.stmts)
+    checkSemantics(info.stmts, modName & ".is")
   var gen = newCodeGen()
 
   # Generate main file
@@ -187,7 +187,7 @@ proc buildBinary(source, inputPath: string): string =
     cFiles.add(modCPath)
 
   # Generate and write main C file
-  let mainC = compileToC(source, baseDir)
+  let mainC = compileToC(source, baseDir, inputPath)
   let mainCPath = inputPath.changeFileExt("c")
   writeFile(mainCPath, mainC)
   cFiles.add(mainCPath)
@@ -236,7 +236,7 @@ proc main() =
 
     of "check":
       let stmts = compileToAst(source)
-      let errors = analyze(stmts)
+      let errors = analyze(stmts, filename)
       if errors.len > 0:
         for e in errors: echo e
         quit(1)
@@ -245,7 +245,7 @@ proc main() =
 
     of "emit":
       let baseDir = parentDir(filename)
-      echo compileToC(source, baseDir)
+      echo compileToC(source, baseDir, filename)
 
     of "build":
       let bin = buildBinary(source, filename)

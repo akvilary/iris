@@ -38,6 +38,7 @@ type
   # Forward declarations
   Expr* = ref object of RootObj
   Stmt* = ref object of RootObj
+    line*: int  # source line (0 = unknown, e.g. macro-generated)
 
   DestructPattern* = ref object
     case kind*: DestructPatternKind

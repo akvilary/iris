@@ -949,14 +949,15 @@ proc parseCaseBlock(P: var Parser): Stmt =
   CaseStmt(expr: expr, branches: branches, elseBranch: elseBranch)
 
 proc parseStmt*(P: var Parser): Stmt =
+  let stmtLine = P.current().line
   case P.peek()
-  of tkAt: P.parseDecl()
-  of tkIf: P.parseIf()
+  of tkAt: result = P.parseDecl()
+  of tkIf: result = P.parseIf()
   of tkWhile:
     discard P.advance()
     let cond = P.parseExpr()
     P.expect(tkColon); P.skipNewlines()
-    WhileStmt(condition: cond, body: P.parseBlockBody())
+    result = WhileStmt(condition: cond, body: P.parseBlockBody())
   of tkFor:
     discard P.advance()
     let varName = P.parseAtIdent()
@@ -968,57 +969,52 @@ proc parseStmt*(P: var Parser): Stmt =
     if P.at(tkElse):
       discard P.advance(); P.expect(tkColon); P.skipNewlines()
       elseBranch = P.parseBlockBody()
-    ForStmt(varName: varName, iter: iter, body: body, elseBranch: elseBranch)
+    result = ForStmt(varName: varName, iter: iter, body: body, elseBranch: elseBranch)
   of tkBreak:
     discard P.advance()
-    BreakStmt(label: P.tryParseIdent())
+    result = BreakStmt(label: P.tryParseIdent())
   of tkContinue:
     discard P.advance()
-    ContinueStmt(label: P.tryParseIdent())
+    result = ContinueStmt(label: P.tryParseIdent())
   of tkReturn:
     discard P.advance()
-    ReturnStmt()
+    result = ReturnStmt()
   of tkResult:
     discard P.advance()
     if P.at(tkDot):
-      # result.field = value
       discard P.advance()
       let field = P.parseIdentName()
       P.expect(tkEq)
-      ResultAssignStmt(field: field, value: P.parseExpr())
+      result = ResultAssignStmt(field: field, value: P.parseExpr())
     else:
-      # result = value
       P.expect(tkEq)
-      ResultAssignStmt(value: P.parseExpr())
+      result = ResultAssignStmt(value: P.parseExpr())
   of tkBlock:
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()
-    BlockStmt(body: P.parseBlockBody())
+    result = BlockStmt(body: P.parseBlockBody())
   of tkSpawn:
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()
-    SpawnStmt(body: P.parseBlockBody())
-  of tkCase: P.parseCaseBlock()
+    result = SpawnStmt(body: P.parseBlockBody())
+  of tkCase: result = P.parseCaseBlock()
   of tkImport:
     discard P.advance()
     let baseName = P.parseIdentName()
     if P.at(tkSlash):
-      # import std/[a, b] or import std/module
       discard P.advance()
       if P.at(tkLBracket):
-        # import std/[a, b, c]
         discard P.advance()
         var modules: seq[string]
         while not P.at(tkRBracket) and not P.at(tkEof):
           modules.add(baseName & "/" & P.parseIdentName())
           if P.at(tkComma): discard P.advance()
         P.expect(tkRBracket)
-        ImportListStmt(modules: modules)
+        result = ImportListStmt(modules: modules)
       else:
-        # import std/module
-        ImportStmt(module: baseName & "/" & P.parseIdentName())
+        result = ImportStmt(module: baseName & "/" & P.parseIdentName())
     else:
-      ImportStmt(module: baseName)
+      result = ImportStmt(module: baseName)
   of tkFrom:
     discard P.advance()
     let module = P.parseIdentName()
@@ -1028,7 +1024,7 @@ proc parseStmt*(P: var Parser): Stmt =
     while P.at(tkComma):
       discard P.advance()
       names.add(P.parseIdentName())
-    FromImportStmt(module: module, names: names)
+    result = FromImportStmt(module: module, names: names)
   of tkQuit:
     discard P.advance()
     var arg: Expr = nil
@@ -1036,10 +1032,10 @@ proc parseStmt*(P: var Parser): Stmt =
       discard P.advance()
       if not P.at(tkRParen): arg = P.parseExpr()
       P.expect(tkRParen)
-    QuitStmt(expr: arg)
+    result = QuitStmt(expr: arg)
   of tkDiscard:
     discard P.advance()
-    DiscardStmt()
+    result = DiscardStmt()
   else:
     # Check for tuple destructuring: ( @name, ... ) = expr
     if P.at(tkLParen):
@@ -1050,26 +1046,29 @@ proc parseStmt*(P: var Parser): Stmt =
                        P.at(tkLParen)
       P.pos = saved  # restore
       if isDestruct:
-        return P.parseDestructDecl()
+        result = P.parseDestructDecl()
+        result.line = stmtLine
+        return
     # Expression, assignment, or compound assignment
     let expr = P.parseExpr()
     if P.at(tkEq):
       discard P.advance()
-      AssignStmt(target: expr, value: P.parseExpr())
+      result = AssignStmt(target: expr, value: P.parseExpr())
     elif P.at(tkPlusEq):
       discard P.advance()
-      CompoundAssignStmt(target: expr, op: opAdd, value: P.parseExpr())
+      result = CompoundAssignStmt(target: expr, op: opAdd, value: P.parseExpr())
     elif P.at(tkMinusEq):
       discard P.advance()
-      CompoundAssignStmt(target: expr, op: opSub, value: P.parseExpr())
+      result = CompoundAssignStmt(target: expr, op: opSub, value: P.parseExpr())
     elif P.at(tkStarEq):
       discard P.advance()
-      CompoundAssignStmt(target: expr, op: opMul, value: P.parseExpr())
+      result = CompoundAssignStmt(target: expr, op: opMul, value: P.parseExpr())
     elif P.at(tkSlashEq):
       discard P.advance()
-      CompoundAssignStmt(target: expr, op: opDiv, value: P.parseExpr())
+      result = CompoundAssignStmt(target: expr, op: opDiv, value: P.parseExpr())
     else:
-      ExprStmt(expr: expr)
+      result = ExprStmt(expr: expr)
+  result.line = stmtLine
 
 proc parse*(P: var Parser): seq[Stmt] =
   P.skipNewlines()

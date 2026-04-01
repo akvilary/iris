@@ -26,11 +26,16 @@ type
     initVars: HashSet[string] # definitely-initialized variable names
     knownTypes: HashSet[string]
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
+    filename: string           # source file path
+    currentLine: int           # line of the statement being analyzed
 
 # ── Helpers ──
 
 proc error(ctx: var SemaContext, msg: string) =
-  ctx.errors.add(msg)
+  if ctx.currentLine > 0:
+    ctx.errors.add(ctx.filename & ":" & $ctx.currentLine & ": " & msg)
+  else:
+    ctx.errors.add(msg)
 
 proc pushScope(ctx: var SemaContext) =
   ctx.scopes.add(Scope(vars: initTable[string, VarInfo]()))
@@ -217,6 +222,8 @@ proc analyzeBody(ctx: var SemaContext, body: seq[Stmt]) =
 
 proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
   if s == nil: return
+  if s.line > 0:
+    ctx.currentLine = s.line
 
   if s of DeclStmt:
     let d = DeclStmt(s)
@@ -483,7 +490,7 @@ const builtinNames = [
   "str",
 ]
 
-proc analyze*(stmts: seq[Stmt]): seq[string] =
+proc analyze*(stmts: seq[Stmt], filename: string = ""): seq[string] =
   ## Run semantic analysis on a list of statements.
   ## Returns a list of error messages (empty = no errors).
   var ctx = SemaContext(
@@ -491,6 +498,7 @@ proc analyze*(stmts: seq[Stmt]): seq[string] =
     initVars: initHashSet[string](),
     knownTypes: initHashSet[string](),
     fnParams: initHashSet[string](),
+    filename: filename,
   )
   ctx.pushScope()
   # Register builtins
