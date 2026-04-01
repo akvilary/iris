@@ -11,13 +11,13 @@ if b:
   *echo("unreachable")
 
 # case of some/none
-caseblock a:
+case a:
   of some:
     *echo(a.get())
   of none:
     *echo("nothing")
 
-caseblock b:
+case b:
   of some:
     *echo("unreachable")
   of none:

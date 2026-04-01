@@ -151,8 +151,8 @@ if condition:
 else:
   doOtherThing()
 
-# caseblock — case with blocks:
-caseblock color:
+# case — case with blocks:
+case color:
   of red:
     paintRed()
     logColor()
@@ -160,8 +160,8 @@ caseblock color:
     paintGreen()
 ```
 
-`case` is always an expression. `caseblock` is always a statement with blocks.
-Both `case` and `caseblock` must be exhaustive (all variants or `else`).
+`case` without colon is an expression. `case` with colon is a statement with blocks.
+Both forms must be exhaustive (all variants or `else`).
 
 ## Truthiness
 
@@ -936,7 +936,7 @@ n = n - 10               # ERROR: natural cannot be negative
 ### Option
 
 No null/nil in Iris. `Option[T]` represents a value that may or may not exist.
-Works with `?`, `caseblock`, and `else` — same patterns as error handling.
+Works with `?`, `case`, and `else` — same patterns as error handling.
 
 ```
 # Creating
@@ -944,7 +944,7 @@ Works with `?`, `caseblock`, and `else` — same patterns as error handling.
 @b = none(int)           # Option[int] without value
 
 # Pattern matching
-caseblock a:
+case a:
   of some: *echo(a.get())           # 42
   of none: *echo("nothing")
 
@@ -1204,13 +1204,13 @@ Two definitions — explicit and clear:
     of point 0.0)
 ```
 
-### caseblock/of — pattern matching with blocks
+### case/of — pattern matching with blocks
 
 Exhaustive by default. Compiler checks all cases are handled.
 
 #### Enums — short member names
 
-Inside `caseblock`, use **member name only** — no full path needed:
+Inside `case`, use **member name only** — no full path needed:
 
 ```
 @Color! enum:
@@ -1218,7 +1218,7 @@ Inside `caseblock`, use **member name only** — no full path needed:
 
 @c = Color.red
 
-caseblock c:
+case c:
   of red:
     *echo("red!")
   of green:
@@ -1230,7 +1230,7 @@ caseblock c:
 Partial match with `else`:
 
 ```
-caseblock c:
+case c:
   of red: *echo("red!")
   else: discard            # covers green, blue
 ```
@@ -1238,20 +1238,20 @@ caseblock c:
 Without `else` and without all members → **compile error**:
 
 ```
-caseblock c:
+case c:
   of red: *echo("red!")
   # ERROR: non-exhaustive — green, blue not handled
 ```
 
 #### Union types — match on type
 
-`caseblock/of` works on union types. All types must be covered:
+`case/of` works on union types. All types must be covered:
 
 ```
 # Response from fetch is: Data else ServerError else NetworkError
 
 @resp = fetch("http://api.com")
-caseblock resp:
+case resp:
   of ok:
     @data = resp.get()
     *echo(data)
@@ -1264,7 +1264,7 @@ caseblock resp:
 Partial match with `else`:
 
 ```
-caseblock resp:
+case resp:
   of ok:
     @data = resp.get()
   else:
@@ -1273,7 +1273,7 @@ caseblock resp:
 
 #### Rules
 
-- `caseblock` must always be exhaustive (all cases or `else`)
+- `case` must always be exhaustive (all cases or `else`)
 - No `_:` wildcard — use `else:` instead
 - `discard` to explicitly ignore: `else: discard`
 - Enum members use short names (not `Color.red`, just `red`)
@@ -1763,7 +1763,7 @@ No automatic unwrapping — always use `.get()` to extract ok value.
 ### Declaring errors
 
 Error types use the `error` keyword (not `object`). This tells the compiler
-the type is an error — falsy in conditions, assignable to `result`, usable with `caseblock`.
+the type is an error — falsy in conditions, assignable to `result`, usable with `case`.
 
 ```
 # Simple errors
@@ -1857,11 +1857,11 @@ if not cfg:
   @cfg = Config.default()
 ```
 
-#### 3. `caseblock` — pattern match on all cases
+#### 3. `case` — pattern match on all cases
 
 ```
 @response = fetch("http://api.com/data")
-caseblock response:
+case response:
   of ok:
     @data = response.get()
     *echo(data)
@@ -1881,7 +1881,7 @@ caseblock response:
 | `?` | Propagate error to caller |
 | `.get()` | Explicit unwrap of ok value — always required |
 | `if`/`else` | Check result, handle error inline |
-| `caseblock` | Pattern match on `ok` and specific error types |
+| `case` | Pattern match on `ok` and specific error types |
 
 ## Tooling (built into compiler)
 

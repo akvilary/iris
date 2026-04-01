@@ -24,7 +24,7 @@ type
     tkObject, tkEnum, tkTuple, tkConcept, tkError
     tkImport, tkFrom, tkExport
     tkWhen, tkIsMain
-    tkCase, tkCaseblock, tkOf, tkDiscard
+    tkCase, tkOf, tkDiscard
     tkNot, tkAnd, tkOr
     tkSome, tkNone, tkOk
     tkQuit, tkOwn
@@ -122,7 +122,7 @@ let keywords* = {
   "concept": tkConcept, "error": tkError,
   "import": tkImport, "from": tkFrom, "export": tkExport,
   "when": tkWhen, "isMain": tkIsMain,
-  "case": tkCase, "caseblock": tkCaseblock, "of": tkOf, "discard": tkDiscard,
+  "case": tkCase, "of": tkOf, "discard": tkDiscard,
   "not": tkNot, "and": tkAnd, "or": tkOr,
   "some": tkSome, "none": tkNone, "ok": tkOk,
   "quit": tkQuit, "own": tkOwn,

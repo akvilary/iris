@@ -998,7 +998,7 @@ proc parseStmt*(P: var Parser): Stmt =
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()
     SpawnStmt(body: P.parseBlockBody())
-  of tkCaseblock: P.parseCaseBlock()
+  of tkCase: P.parseCaseBlock()
   of tkImport:
     discard P.advance()
     let baseName = P.parseIdentName()

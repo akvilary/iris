@@ -4,7 +4,7 @@
 
 Iris compiles to C, uses indentation-based syntax, and gives you full control over memory — without a garbage collector, without lifetime annotations, and without surprises.
 
-```python
+```
 # hello.is
 @name = "Iris"
 *echo("Hello from {name}!")
@@ -29,7 +29,7 @@ Iris compiles to C, uses indentation-based syntax, and gives you full control ov
 
 Three levels of mutability — nothing more:
 
-```python
+```
 @host = "localhost"       # immutable
 @port mut = 8080          # mutable
 @maxRetries const = 3     # compile-time constant
@@ -39,7 +39,7 @@ No zero-initialization. The compiler verifies every variable is assigned before 
 
 ### Functions and named arguments
 
-```python
+```
 @factorial func(@n int) ok int:
   if n <= 1:
     result = 1
@@ -51,7 +51,7 @@ No zero-initialization. The compiler verifies every variable is assigned before 
 
 Call with positional or named arguments:
 
-```python
+```
 @connect func(@host str, @port int) ok Connection:
   ...
 
@@ -61,7 +61,7 @@ connect(port=443, host="example.com")
 
 ### Types
 
-```python
+```
 @User object:
   @name String
   @age int
@@ -77,7 +77,7 @@ connect(port=443, host="example.com")
 
 ### Object variants (tagged unions)
 
-```python
+```
 @Shape object:
   @x int
   @y int
@@ -97,7 +97,7 @@ The compiler enforces that variant-specific fields are only accessed inside the 
 
 Errors are types, not exceptions. Functions declare what they return — and what can go wrong:
 
-```python
+```
 @ParseError error:
   @message String
 
@@ -110,7 +110,7 @@ Errors are types, not exceptions. Functions declare what they return — and wha
 
 Callers handle errors explicitly:
 
-```python
+```
 @port = parsePort("8080")
 if not port:
   *echo("bad port")
@@ -120,8 +120,8 @@ if not port:
 
 Or with pattern matching:
 
-```python
-caseblock parsePort(value):
+```
+case parsePort(value):
   of ok:
     listen(port.get())
   of ParseError:
@@ -132,13 +132,13 @@ caseblock parsePort(value):
 
 No null. Values that may be absent use `Option[T]`:
 
-```python
+```
 @user = findUser(id=42)
 
 if user:
   *echo(user.get().name)
 
-caseblock user:
+case user:
   of some:
     greet(user.get())
   of none:
@@ -149,7 +149,7 @@ caseblock user:
 
 `if` and `case` work as both statements and expressions:
 
-```python
+```
 @status = "ok" if code == 200 else "error"
 
 @label = case color of red "Red" of green "Green" of blue "Blue"
@@ -165,7 +165,7 @@ caseblock user:
 
 Generics use duck typing at instantiation — no boxing, full monomorphization:
 
-```python
+```
 @identity func[T](@x T) ok T:
   result = x
 
@@ -175,7 +175,7 @@ Generics use duck typing at instantiation — no boxing, full monomorphization:
 
 Concepts add optional constraints with clear error messages:
 
-```python
+```
 @Printable concept:
   @toString func(@self) ok str
 
@@ -189,7 +189,7 @@ Types satisfy concepts automatically — no `impl` blocks needed.
 
 Three string types with clear semantics:
 
-```python
+```
 @greeting = "hello"           # str — static, immutable, zero-cost
 @owned = ~"hello"             # String — heap-owned, mutable
 @name = "world"
@@ -202,7 +202,7 @@ In function parameters, `view[String]` accepts both `str` and `String` at zero c
 
 Stack by default. Heap only when you ask for it — always with `~`:
 
-```python
+```
 @nums = [1, 2, 3]            # array[int, 3] — stack
 @dynNums = ~[1, 2, 3]        # Seq[int] — heap
 
@@ -221,7 +221,7 @@ Stack by default. Heap only when you ask for it — always with `~`:
 
 No async/await. Concurrency is `block` + `spawn` — structured and guaranteed to clean up:
 
-```python
+```
 # Parallel fetch — both complete before block exits:
 @results block:
   spawn: fetch("url1")
@@ -241,7 +241,7 @@ No async/await. Concurrency is `block` + `spawn` — structured and guaranteed t
 
 Channels transfer ownership — no shared mutable state, no data races:
 
-```python
+```
 @ch = channel[int](10)
 ch.send(data)               # data moved into channel
 @val = ch.receive()
@@ -251,7 +251,7 @@ The concurrency runtime is **zero-cost when unused** — programs without `spawn
 
 ### Modules
 
-```python
+```
 import net
 @conn = net.connect("localhost", 8080)
 
@@ -263,7 +263,7 @@ from net import connect, listen
 
 Hygienic macros written in Iris itself, called with `*` prefix:
 
-```python
+```
 @log macro(@msg):
   ast.expand:
     *echo("[LOG] {^msg^}")
