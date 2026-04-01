@@ -81,6 +81,13 @@ proc typeToStr(t: TypeExpr): string =
     return "(" & TupleType(t).elems.mapIt(typeToStr(it)).join(", ") & ")"
   return "?"
 
+proc isStrType(t: TypeExpr): bool =
+  ## Check if type is `str`
+  if t == nil: return false
+  if t of NamedType:
+    return NamedType(t).name == "str"
+  return false
+
 proc checkFieldsNoView(ctx: var SemaContext, typeName: string, fields: seq[TypeField]) =
   ## Reject view[T] in struct/object fields — views are borrowed references
   ## that may dangle if stored.
@@ -213,6 +220,9 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
 
   if s of DeclStmt:
     let d = DeclStmt(s)
+    # str cannot be mutable — it points to read-only .rodata
+    if d.modifier == declMut and isStrType(d.typeAnn):
+      ctx.error("error: 'str' cannot be declared as mut — it references read-only data (.rodata)")
     # Analyze the value expression first (before declaring the var)
     if d.value != nil:
       ctx.analyzeExpr(d.value)
@@ -265,6 +275,9 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     let savedParams = ctx.fnParams
     ctx.fnParams = initHashSet[string]()
     for p in f.params:
+      # str cannot be passed as mut — it references read-only data (.rodata)
+      if p.modifier == paramMut and isStrType(p.typeAnn):
+        ctx.error("error: parameter '" & p.name & "' has type str which cannot be mut — it references read-only data (.rodata)")
       ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn))
       ctx.fnParams.incl(p.name)
       ctx.markInitialized(p.name)

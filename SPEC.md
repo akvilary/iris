@@ -472,7 +472,7 @@ lives on the stack — only the data is in heap. This is explicit:
 # Heap — explicit, you chose a heap type
 @buf mut String = ~""                            # buffer in heap
 @list mut Seq[int] = ~[]                      # buffer in heap
-@map mut HashTable[String, int] = ~{~"key": 1}   # buffer in heap
+@map mut HashTable[str, int] = ~{"key": 1}       # buffer in heap
 @ids HashSet[int] = ~{1, 2, 3}               # buffer in heap
 @user Heap[User] = ~User(name=~"Andrey")      # object in heap
 
@@ -491,7 +491,7 @@ lives on the stack — only the data is in heap. This is explicit:
 | `~"hello"` | `String` | Heap — owned string |
 | `[1, 2, 3]` | `array[int, 3]` | Stack — fixed array |
 | `~[1, 2, 3]` | `Seq[int]` | Heap — dynamic sequence |
-| `~{~"k": 1}` | `HashTable[String, int]` | Heap — hash table |
+| `~{"k": 1}` | `HashTable[str, int]` | Heap — hash table |
 | `~{1, 2, 3}` | `HashSet[int]` | Heap — hash set |
 | `User(...)` | `User` | Stack — object |
 | `~User(...)` | `Heap[User]` | Heap — boxed object |
@@ -832,17 +832,20 @@ Inline hash table literal with `~{key: value}`:
 
 ```
 # Create hash table:
-@headers = ~{~"Content-Type": ~"json", ~"Authorization": ~"Bearer xxx"}
+@headers = ~{"Content-Type": "json", "Authorization": "Bearer xxx"}
 
-# Type: HashTable[String, int]
-@scores: HashTable[String, int] = ~{~"alice": 100, ~"bob": 85}
+# Type: HashTable[str, int]
+@scores: HashTable[str, int] = ~{"alice": 100, "bob": 85}
 
 # Access:
 *echo(headers["Content-Type"])
 
 # Empty:
-@empty = HashTable[String, int]()
+@empty = HashTable[str, int]()
 ```
+
+Key type must be owned — `view[T]` is not allowed as a hash table key
+(it borrows data with a limited lifetime, but keys are stored long-term).
 
 ### HashSet
 
@@ -852,8 +855,8 @@ Inline hash set literal with `~{values}`:
 @ids = ~{1, 2, 3, 4}
 # Type: HashSet[int]
 
-@names = ~{~"Alice", ~"Bob", ~"Charlie"}
-# Type: HashSet[String]
+@names = ~{"Alice", "Bob", "Charlie"}
+# Type: HashSet[str]
 
 if 2 in ids:
   *echo("found")
@@ -985,6 +988,7 @@ Three string types — explicit about where data lives:
 - `str` — a **static reference**: `(const char* data, size_t len)`.
   Points only to string literals embedded in the binary (`.rodata`).
   Lives forever — safe to store in object fields. `"hello"` has type `str`.
+  `str mut` is a compile error — `.rodata` is read-only, mutation is impossible.
 - `view[String]` — a **borrowed view**: `(const char* data, size_t len)`.
   Same layout as `str`, but may point to heap data (`String` buffer).
   Does not own data, does not allocate. Restricted to parameters,
