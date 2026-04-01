@@ -1,0 +1,6 @@
+# EXPECT ERROR: undeclared variable 'a'
+@Point tuple:
+  @x int
+  @y int
+*echo(a)
+(@a, @b) = Point(1, 2)

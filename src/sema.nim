@@ -4,6 +4,7 @@
 ## Current checks:
 ##   - view[T] cannot be stored in object/error/tuple fields (dangling reference)
 ##   - variables declared without init must be assigned on all paths before use
+##   - undeclared variables cannot be used
 ##
 ## Future: ownership tracking, borrow checker, lifetime inference
 
@@ -109,9 +110,13 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
 
   if e of IdentExpr:
     let name = IdentExpr(e).name
-    # Check assigned-before-use: only for variables we track (not builtins, not unknown)
-    if ctx.lookupVar(name) and not ctx.isInitialized(name):
-      ctx.error("error: variable '" & name & "' used before initialization")
+    if ctx.lookupVar(name):
+      # Declared — check assigned-before-use
+      if not ctx.isInitialized(name):
+        ctx.error("error: variable '" & name & "' used before initialization")
+    else:
+      # Not declared in any scope
+      ctx.error("error: undeclared variable '" & name & "'")
 
   elif e of BinaryExpr:
     ctx.analyzeExpr(BinaryExpr(e).left)
@@ -419,8 +424,24 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.declareVar(c.name, VarInfo(name: c.name, modifier: declDefault))
     ctx.markInitialized(c.name)
 
-  elif s of ImportStmt or s of ImportListStmt or s of FromImportStmt:
-    discard
+  elif s of ImportStmt:
+    # import mymath → register "mymath" as known name
+    let modName = ImportStmt(s).module.split("/")[^1]
+    ctx.declareVar(modName, VarInfo(name: modName, modifier: declDefault))
+    ctx.markInitialized(modName)
+
+  elif s of ImportListStmt:
+    # import std/[a, b] → register "a", "b"
+    for fullPath in ImportListStmt(s).modules:
+      let modName = fullPath.split("/")[^1]
+      ctx.declareVar(modName, VarInfo(name: modName, modifier: declDefault))
+      ctx.markInitialized(modName)
+
+  elif s of FromImportStmt:
+    # from mymath import add, mul → register "add", "mul"
+    for name in FromImportStmt(s).names:
+      ctx.declareVar(name, VarInfo(name: name, modifier: declDefault))
+      ctx.markInitialized(name)
 
   elif s of SpawnStmt:
     ctx.pushScope()
@@ -439,6 +460,16 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
 
 # ── Public API ──
 
+const builtinNames = [
+  # Builtin type constructors / functions
+  "some", "none",
+  "String", "int", "float", "bool", "rune",
+  "int8", "int16", "int32", "int64",
+  "uint", "uint8", "uint16", "uint32", "uint64",
+  "byte", "natural",
+  "str",
+]
+
 proc analyze*(stmts: seq[Stmt]): seq[string] =
   ## Run semantic analysis on a list of statements.
   ## Returns a list of error messages (empty = no errors).
@@ -449,6 +480,10 @@ proc analyze*(stmts: seq[Stmt]): seq[string] =
     fnParams: initHashSet[string](),
   )
   ctx.pushScope()
+  # Register builtins
+  for name in builtinNames:
+    ctx.declareVar(name, VarInfo(name: name, modifier: declDefault))
+    ctx.markInitialized(name)
   ctx.analyzeBody(stmts)
   ctx.popScope()
   return ctx.errors

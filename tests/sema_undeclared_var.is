@@ -1,0 +1,2 @@
+# EXPECT ERROR: undeclared variable 'x'
+*echo(x)
