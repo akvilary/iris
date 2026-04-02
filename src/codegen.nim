@@ -88,6 +88,10 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
       "iris_view_" & NamedType(gt.args[0]).name
     elif gt.name == "Seq" and gt.args.len == 1:
       "iris_Seq_" & g.typeToCStr(gt.args[0])
+    elif gt.name == "HashTable" and gt.args.len == 2:
+      "iris_HT_" & g.typeToCStr(gt.args[0]) & "__" & g.typeToCStr(gt.args[1])
+    elif gt.name == "HashSet" and gt.args.len == 1:
+      "iris_HS_" & g.typeToCStr(gt.args[0])
     elif gt.name == "array" and gt.args.len == 2:
       "__array_" & g.typeToCStr(gt.args[0]) & "_" & g.typeToCStr(gt.args[1])
     else:
@@ -102,6 +106,8 @@ proc varCType(g: CodeGen, name: string): string =
 
 proc isArrayType(ct: string): bool = ct.startsWith("__array_")
 proc isSeqType(ct: string): bool = ct.startsWith("iris_Seq_")
+proc isHashTableType(ct: string): bool = ct.startsWith("iris_HT_")
+proc isHashSetType(ct: string): bool = ct.startsWith("iris_HS_")
 
 proc arrayElemType(ct: string): string =
   let rest = ct[8..^1]  # strip "__array_"
@@ -115,12 +121,28 @@ proc arraySize(ct: string): string =
 proc seqElemType(ct: string): string =
   ct[9..^1]  # strip "iris_Seq_"
 
+proc htKeyType(ct: string): string =
+  let rest = ct[8..^1]  # strip "iris_HT_"
+  let sep = rest.find("__")
+  if sep >= 0: rest[0..<sep] else: rest
+
+proc htValType(ct: string): string =
+  let rest = ct[8..^1]
+  let sep = rest.find("__")
+  if sep >= 0: rest[sep+2..^1] else: ""
+
+proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
+
 proc cTypeToIris(g: CodeGen, ct: string): string =
   ## Convert C type name back to Iris type name for error messages.
   if ct.isArrayType():
     return "array[" & g.cTypeToIris(arrayElemType(ct)) & ", " & arraySize(ct) & "]"
   if ct.isSeqType():
     return "Seq[" & g.cTypeToIris(seqElemType(ct)) & "]"
+  if ct.isHashTableType():
+    return "HashTable[" & g.cTypeToIris(htKeyType(ct)) & ", " & g.cTypeToIris(htValType(ct)) & "]"
+  if ct.isHashSetType():
+    return "HashSet[" & g.cTypeToIris(hsElemType(ct)) & "]"
   case ct
   of "iris_str": "str"
   of "iris_view_String": "view[String]"
@@ -238,8 +260,18 @@ proc inferCType(g: CodeGen, e: Expr): string =
                 elif s.elems.len > 0: g.inferCType(s.elems[0])
                 else: "int64_t"
     return "iris_Seq_" & elemT
-  if e of HashTableLitExpr: return "iris_HashTable"
-  if e of HashSetLitExpr: return "iris_HashSet"
+  if e of HashTableLitExpr:
+    let ht = HashTableLitExpr(e)
+    if ht.entries.len > 0:
+      let kt = g.inferCType(ht.entries[0].key)
+      let vt = g.inferCType(ht.entries[0].value)
+      return "iris_HT_" & kt & "__" & vt
+    return "iris_HT_int64_t__int64_t"
+  if e of HashSetLitExpr:
+    let hs = HashSetLitExpr(e)
+    if hs.elems.len > 0:
+      return "iris_HS_" & g.inferCType(hs.elems[0])
+    return "iris_HS_int64_t"
   if e of HeapAllocExpr:
     let inner = HeapAllocExpr(e).inner
     if inner.fn of IdentExpr:
@@ -286,7 +318,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
     if fa.expr of IdentExpr:
       let name = IdentExpr(fa.expr).name
       let varType = g.varCType(name)
-      if fa.field == "len" and (varType.isArrayType() or varType.isSeqType()):
+      if fa.field == "len" and (varType.isArrayType() or varType.isSeqType() or varType.isHashTableType() or varType.isHashSetType()):
         return "int64_t"
       if fa.field == "cap" and (varType.isArrayType() or varType.isSeqType()):
         return "int64_t"
@@ -301,6 +333,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
       let varType = g.varCType(IdentExpr(idx.expr).name)
       if varType.isArrayType(): return arrayElemType(varType)
       if varType.isSeqType(): return seqElemType(varType)
+      if varType.isHashTableType(): return htValType(varType)
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   if e of IfExpr:
@@ -321,6 +354,141 @@ proc ensureArrayType(g: var CodeGen, elemType, size: string) =
   g.emittedSeqTypes.add(arrType)
   var s = ""
   s.add("typedef struct { " & elemType & " data[" & size & "]; } " & arrType & ";\n\n")
+  g.pendingSpecializations.add(s)
+
+proc hashFuncFor(ctype: string): string =
+  case ctype
+  of "iris_str", "iris_view_String": "iris_hash_str"
+  of "iris_String": "iris_hash_str"  # String has same data/len layout
+  of "int64_t", "int32_t", "int16_t", "int8_t",
+     "uint64_t", "uint32_t", "uint16_t", "uint8_t": "iris_hash_int"
+  of "double", "float": "iris_hash_double"
+  of "bool": "iris_hash_int"
+  else: "iris_hash_int"
+
+proc eqFuncFor(ctype: string): string =
+  case ctype
+  of "iris_str", "iris_view_String": "iris_eq_str"
+  of "iris_String": "iris_eq_str"
+  of "double", "float": "iris_eq_double"
+  else: "iris_eq_int"
+
+proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
+  let htType = "iris_HT_" & keyType & "__" & valType
+  if htType in g.emittedSeqTypes: return
+  g.emittedSeqTypes.add(htType)
+  let hashFn = hashFuncFor(keyType)
+  let eqFn = eqFuncFor(keyType)
+  # For str keys, we need to cast to iris_str for hashing
+  let keyIsStr = keyType in ["iris_str", "iris_view_String", "iris_String"]
+  let hashCall = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[i])"
+                 else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")s->keys[i])"
+  let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
+                  else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")key)"
+  let eqCall = if keyIsStr: eqFn & "(*(iris_str*)&s->keys[i], *(iris_str*)&key)"
+               else: eqFn & "(s->keys[i], key)"
+  var s = ""
+  # Struct: parallel arrays for used flags, keys, values
+  s.add("typedef struct { bool* used; " & keyType & "* keys; " & valType & "* vals; size_t cap; size_t len; } " & htType & ";\n")
+  # Create with capacity
+  s.add("static inline " & htType & " " & htType & "_new(size_t cap) {\n")
+  s.add("  if(cap<8) cap=8;\n")
+  s.add("  bool* u=(bool*)calloc(cap,sizeof(bool));\n")
+  s.add("  " & keyType & "* k=(" & keyType & "*)calloc(cap,sizeof(" & keyType & "));\n")
+  s.add("  " & valType & "* v=(" & valType & "*)calloc(cap,sizeof(" & valType & "));\n")
+  s.add("  return (" & htType & "){u,k,v,cap,0};\n}\n")
+  # Internal find slot
+  s.add("static inline size_t " & htType & "_findslot(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
+  s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
+  s.add("  return i;\n}\n")
+  # Grow
+  s.add("static inline void " & htType & "_grow(" & htType & "* s) {\n")
+  s.add("  size_t oldcap=s->cap; bool* ou=s->used; " & keyType & "* ok=s->keys; " & valType & "* ov=s->vals;\n")
+  s.add("  s->cap*=2; s->len=0;\n")
+  s.add("  s->used=(bool*)calloc(s->cap,sizeof(bool));\n")
+  s.add("  s->keys=(" & keyType & "*)calloc(s->cap,sizeof(" & keyType & "));\n")
+  s.add("  s->vals=(" & valType & "*)calloc(s->cap,sizeof(" & valType & "));\n")
+  s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & htType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->vals[j]=ov[i]; s->len++; }\n")
+  s.add("  free(ou); free(ok); free(ov);\n}\n")
+  # set
+  s.add("static inline void " & htType & "_set(" & htType & "* s, " & keyType & " key, " & valType & " val) {\n")
+  s.add("  if(s->len*4>=s->cap*3) " & htType & "_grow(s);\n")  # 75% load factor
+  s.add("  size_t i=" & htType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) s->len++;\n")
+  s.add("  s->used[i]=true; s->keys[i]=key; s->vals[i]=val;\n}\n")
+  # get (returns value, undefined if missing)
+  s.add("static inline " & valType & " " & htType & "_get(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("  size_t i=" & htType & "_findslot(s,key);\n")
+  s.add("  return s->vals[i];\n}\n")
+  # has
+  s.add("static inline bool " & htType & "_has(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("  size_t i=" & htType & "_findslot(s,key);\n")
+  s.add("  return s->used[i];\n}\n")
+  # remove
+  s.add("static inline void " & htType & "_remove(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("  size_t i=" & htType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) return;\n")
+  s.add("  s->used[i]=false; s->len--;\n")
+  # backward-shift deletion
+  let hashCallJ = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[j])"
+                  else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")s->keys[j])"
+  s.add("  size_t j=i;\n")
+  s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
+  s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
+  s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
+  s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n}\n")
+  # free
+  s.add("static inline void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
+  g.pendingSpecializations.add(s)
+
+proc ensureHashSetType(g: var CodeGen, elemType: string) =
+  let hsType = "iris_HS_" & elemType
+  if hsType in g.emittedSeqTypes: return
+  g.emittedSeqTypes.add(hsType)
+  let hashFn = hashFuncFor(elemType)
+  let eqFn = eqFuncFor(elemType)
+  let keyIsStr = elemType in ["iris_str", "iris_view_String", "iris_String"]
+  let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
+                  else: hashFn & "((" & (if elemType == "double": "double" else: "int64_t") & ")key)"
+  let eqCall = if keyIsStr: eqFn & "(*(iris_str*)&s->keys[i], *(iris_str*)&key)"
+               else: eqFn & "(s->keys[i], key)"
+  var s = ""
+  s.add("typedef struct { bool* used; " & elemType & "* keys; size_t cap; size_t len; } " & hsType & ";\n")
+  s.add("static inline " & hsType & " " & hsType & "_new(size_t cap) {\n")
+  s.add("  if(cap<8) cap=8;\n")
+  s.add("  return (" & hsType & "){(bool*)calloc(cap,sizeof(bool)),(" & elemType & "*)calloc(cap,sizeof(" & elemType & ")),cap,0};\n}\n")
+  s.add("static inline size_t " & hsType & "_findslot(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
+  s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
+  s.add("  return i;\n}\n")
+  s.add("static inline void " & hsType & "_grow(" & hsType & "* s) {\n")
+  s.add("  size_t oldcap=s->cap; bool* ou=s->used; " & elemType & "* ok=s->keys;\n")
+  s.add("  s->cap*=2; s->len=0;\n")
+  s.add("  s->used=(bool*)calloc(s->cap,sizeof(bool));\n")
+  s.add("  s->keys=(" & elemType & "*)calloc(s->cap,sizeof(" & elemType & "));\n")
+  s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & hsType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->len++; }\n")
+  s.add("  free(ou); free(ok);\n}\n")
+  s.add("static inline void " & hsType & "_add(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("  if(s->len*4>=s->cap*3) " & hsType & "_grow(s);\n")
+  s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) s->len++;\n")
+  s.add("  s->used[i]=true; s->keys[i]=key;\n}\n")
+  s.add("static inline bool " & hsType & "_has(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
+  s.add("  return s->used[i];\n}\n")
+  s.add("static inline void " & hsType & "_remove(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) return;\n")
+  s.add("  s->used[i]=false; s->len--;\n")
+  s.add("  size_t j=i;\n")
+  s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
+  let hashCallJ = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[j])"
+                  else: hashFn & "((" & (if elemType == "double": "double" else: "int64_t") & ")s->keys[j])"
+  s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
+  s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
+  s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n}\n")
+  s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
   g.pendingSpecializations.add(s)
 
 proc ensureSeqType(g: var CodeGen, elemType: string) =
@@ -574,6 +742,42 @@ proc genExpr(g: var CodeGen, e: Expr) =
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
+        # HashTable methods
+        if varType.isHashTableType():
+          if fa.field == "set" and c.args.len == 2:
+            g.emit(varType & "_set(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(", ")
+            g.genExpr(c.args[1].value)
+            g.emit(")")
+            return
+          if fa.field == "has" and c.args.len == 1:
+            g.emit(varType & "_has(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          if fa.field == "remove" and c.args.len == 1:
+            g.emit(varType & "_remove(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+        # HashSet methods
+        if varType.isHashSetType():
+          if fa.field == "add" and c.args.len == 1:
+            g.emit(varType & "_add(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          if fa.field == "has" and c.args.len == 1:
+            g.emit(varType & "_has(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          if fa.field == "remove" and c.args.len == 1:
+            g.emit(varType & "_remove(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
       if name == "echo":
@@ -771,6 +975,9 @@ proc genExpr(g: var CodeGen, e: Expr) =
       # .cap on Seq → field access
       if f.field == "cap" and varType.isSeqType():
         g.emit("(int64_t)" & name & ".cap"); return
+      # .len on HashTable/HashSet
+      if f.field == "len" and (varType.isHashTableType() or varType.isHashSetType()):
+        g.emit("(int64_t)" & name & ".len"); return
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
       # Check variant field access
@@ -796,9 +1003,15 @@ proc genExpr(g: var CodeGen, e: Expr) =
   elif e of IndexExpr:
     let idx = IndexExpr(e)
     if idx.expr of IdentExpr:
-      let varType = g.varCType(IdentExpr(idx.expr).name)
+      let varName = IdentExpr(idx.expr).name
+      let varType = g.varCType(varName)
       if varType.isSeqType() or varType.isArrayType():
         g.genExpr(idx.expr); g.emit(".data["); g.genExpr(idx.index); g.emit("]")
+        return
+      if varType.isHashTableType():
+        g.emit(varType & "_get(&" & varName & ", ")
+        g.genExpr(idx.index)
+        g.emit(")")
         return
     g.genExpr(idx.expr); g.emit("["); g.genExpr(idx.index); g.emit("]")
   elif e of MacroCallExpr:
@@ -871,20 +1084,38 @@ proc genExpr(g: var CodeGen, e: Expr) =
       g.emit("}, " & $s.elems.len & ")")
   elif e of HashTableLitExpr:
     let ht = HashTableLitExpr(e)
-    g.emit("iris_HashTable_from(" & $ht.entries.len)
-    for entry in ht.entries:
-      g.emit(", ")
-      g.genExpr(entry.key)
-      g.emit(", ")
-      g.genExpr(entry.value)
-    g.emit(")")
+    let kt = if ht.entries.len > 0: g.inferCType(ht.entries[0].key) else: "int64_t"
+    let vt = if ht.entries.len > 0: g.inferCType(ht.entries[0].value) else: "int64_t"
+    let htType = "iris_HT_" & kt & "__" & vt
+    g.ensureHashTableType(kt, vt)
+    if ht.entries.len == 0:
+      g.emit(htType & "_new(8)")
+    else:
+      # Create table and insert entries via a compound expression
+      let tmp = "__ht_" & $g.tmpCounter; g.tmpCounter += 1
+      g.emit("({" & htType & " " & tmp & "=" & htType & "_new(" & $(ht.entries.len * 2) & ");")
+      for entry in ht.entries:
+        g.emit(htType & "_set(&" & tmp & ",")
+        g.genExpr(entry.key)
+        g.emit(",")
+        g.genExpr(entry.value)
+        g.emit(");")
+      g.emit(tmp & ";})")
   elif e of HashSetLitExpr:
     let hs = HashSetLitExpr(e)
-    g.emit("iris_HashSet_from(" & $hs.elems.len)
-    for el in hs.elems:
-      g.emit(", ")
-      g.genExpr(el)
-    g.emit(")")
+    let et = if hs.elems.len > 0: g.inferCType(hs.elems[0]) else: "int64_t"
+    let hsType = "iris_HS_" & et
+    g.ensureHashSetType(et)
+    if hs.elems.len == 0:
+      g.emit(hsType & "_new(8)")
+    else:
+      let tmp = "__hs_" & $g.tmpCounter; g.tmpCounter += 1
+      g.emit("({" & hsType & " " & tmp & "=" & hsType & "_new(" & $(hs.elems.len * 2) & ");")
+      for el in hs.elems:
+        g.emit(hsType & "_add(&" & tmp & ",")
+        g.genExpr(el)
+        g.emit(");")
+      g.emit(tmp & ";})")
   elif e of HeapAllocExpr:
     let ha = HeapAllocExpr(e)
     let typeName = if ha.inner.fn of IdentExpr: IdentExpr(ha.inner.fn).name
@@ -1008,6 +1239,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.ensureSeqType(seqElemType(ctype))
     if ctype.isArrayType():
       g.ensureArrayType(arrayElemType(ctype), arraySize(ctype))
+    if ctype.isHashTableType():
+      g.ensureHashTableType(htKeyType(ctype), htValType(ctype))
+    if ctype.isHashSetType():
+      g.ensureHashSetType(hsElemType(ctype))
     g.varTypes[d.name] = ctype
     g.emitIndent()
     if d.value == nil:
@@ -1634,6 +1869,53 @@ proc emitPreamble*(g: var CodeGen) =
   g.emit("  return (iris_String){data, (size_t)len, (size_t)len};\n")
   g.emit("}\n\n")
 
+  # wyhash v4.3 by Wang Yi — public domain (Unlicense)
+  g.emit("// wyhash v4.3 by Wang Yi — public domain (Unlicense)\n")
+  g.emit("static inline void _wymum(uint64_t *A, uint64_t *B) {\n")
+  g.emit("#if defined(__SIZEOF_INT128__)\n")
+  g.emit("  __uint128_t r = *A; r *= *B; *A = (uint64_t)r; *B = (uint64_t)(r >> 64);\n")
+  g.emit("#else\n")
+  g.emit("  uint64_t ha=*A>>32, hb=*B>>32, la=(uint32_t)*A, lb=(uint32_t)*B;\n")
+  g.emit("  uint64_t rh=ha*hb, rm0=ha*lb, rm1=hb*la, rl=la*lb;\n")
+  g.emit("  uint64_t t=rl+(rm0<<32), c=t<rl; uint64_t lo=t+(rm1<<32); c+=lo<t;\n")
+  g.emit("  *A=lo; *B=rh+(rm0>>32)+(rm1>>32)+c;\n")
+  g.emit("#endif\n}\n")
+  g.emit("static inline uint64_t _wymix(uint64_t A, uint64_t B) { _wymum(&A,&B); return A^B; }\n")
+  g.emit("static inline uint64_t _wyr8(const uint8_t *p) { uint64_t v; memcpy(&v,p,8); return v; }\n")
+  g.emit("static inline uint64_t _wyr4(const uint8_t *p) { uint32_t v; memcpy(&v,p,4); return v; }\n")
+  g.emit("static inline uint64_t _wyr3(const uint8_t *p, size_t k) {\n")
+  g.emit("  return ((uint64_t)p[0]<<16)|((uint64_t)p[k>>1]<<8)|p[k-1]; }\n")
+  g.emit("static const uint64_t _wyp[4] = {\n")
+  g.emit("  0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull,\n")
+  g.emit("  0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull};\n")
+  g.emit("static inline uint64_t wyhash(const void *key, size_t len, uint64_t seed, const uint64_t *secret) {\n")
+  g.emit("  const uint8_t *p=(const uint8_t*)key; seed^=_wymix(seed^secret[0],secret[1]);\n")
+  g.emit("  uint64_t a,b;\n")
+  g.emit("  if(len<=16){\n")
+  g.emit("    if(len>=4){ a=(_wyr4(p)<<32)|_wyr4(p+((len>>3)<<2)); b=(_wyr4(p+len-4)<<32)|_wyr4(p+len-4-((len>>3)<<2)); }\n")
+  g.emit("    else if(len>0){ a=_wyr3(p,len); b=0; } else a=b=0;\n")
+  g.emit("  } else {\n")
+  g.emit("    size_t i=len;\n")
+  g.emit("    if(i>=48){ uint64_t see1=seed,see2=seed;\n")
+  g.emit("      do{ seed=_wymix(_wyr8(p)^secret[1],_wyr8(p+8)^seed);\n")
+  g.emit("        see1=_wymix(_wyr8(p+16)^secret[2],_wyr8(p+24)^see1);\n")
+  g.emit("        see2=_wymix(_wyr8(p+32)^secret[3],_wyr8(p+40)^see2);\n")
+  g.emit("        p+=48; i-=48; }while(i>=48); seed^=see1^see2; }\n")
+  g.emit("    while(i>16){ seed=_wymix(_wyr8(p)^secret[1],_wyr8(p+8)^seed); i-=16; p+=16; }\n")
+  g.emit("    a=_wyr8(p+i-16); b=_wyr8(p+i-8); }\n")
+  g.emit("  a^=secret[1]; b^=seed; _wymum(&a,&b);\n")
+  g.emit("  return _wymix(a^secret[0]^len, b^secret[1]);\n}\n")
+  g.emit("static inline uint64_t wyhash64(uint64_t A, uint64_t B) {\n")
+  g.emit("  A^=0x2d358dccaa6c78a5ull; B^=0x8bb84b93962eacc9ull; _wymum(&A,&B);\n")
+  g.emit("  return _wymix(A^0x2d358dccaa6c78a5ull, B^0x8bb84b93962eacc9ull);\n}\n")
+  # str/view hash helpers
+  g.emit("static inline uint64_t iris_hash_str(iris_str s) { return wyhash(s.data, s.len, 0, _wyp); }\n")
+  g.emit("static inline bool iris_eq_str(iris_str a, iris_str b) { return a.len==b.len && memcmp(a.data,b.data,a.len)==0; }\n")
+  g.emit("static inline uint64_t iris_hash_int(int64_t v) { return wyhash64((uint64_t)v, 0); }\n")
+  g.emit("static inline bool iris_eq_int(int64_t a, int64_t b) { return a==b; }\n")
+  g.emit("static inline uint64_t iris_hash_double(double v) { uint64_t u; memcpy(&u,&v,8); return wyhash64(u, 0); }\n")
+  g.emit("static inline bool iris_eq_double(double a, double b) { return a==b; }\n\n")
+
   # Common Option types
   g.emit("// Option types\n")
   for t in ["int64_t", "double", "bool", "iris_view_String"]:
@@ -1678,10 +1960,14 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
         let rt = g.typeToCStr(f.returnType)
         if rt.isSeqType(): g.ensureSeqType(seqElemType(rt))
         if rt.isArrayType(): g.ensureArrayType(arrayElemType(rt), arraySize(rt))
+        if rt.isHashTableType(): g.ensureHashTableType(htKeyType(rt), htValType(rt))
+        if rt.isHashSetType(): g.ensureHashSetType(hsElemType(rt))
       for p in f.params:
         let pt = g.typeToCStr(p.typeAnn)
         if pt.isSeqType(): g.ensureSeqType(seqElemType(pt))
         if pt.isArrayType(): g.ensureArrayType(arrayElemType(pt), arraySize(pt))
+        if pt.isHashTableType(): g.ensureHashTableType(htKeyType(pt), htValType(pt))
+        if pt.isHashSetType(): g.ensureHashSetType(hsElemType(pt))
   if g.pendingSpecializations.len > 0:
     g.emit(g.pendingSpecializations)
     g.pendingSpecializations = ""
