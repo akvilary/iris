@@ -348,6 +348,33 @@ proc ensureSeqType(g: var CodeGen, elemType: string) =
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
   s.add("  }\n  s->data[s->len++] = val;\n}\n")
+  # remove (remove at index, preserve order, O(n))
+  s.add("static inline void " & seqType & "_remove(" & seqType & "* s, size_t i) {\n")
+  s.add("  for (size_t j = i; j < s->len - 1; j++) s->data[j] = s->data[j + 1];\n")
+  s.add("  s->len--;\n}\n")
+  # removeSwap (remove at index, swap with last, O(1))
+  s.add("static inline void " & seqType & "_removeSwap(" & seqType & "* s, size_t i) {\n")
+  s.add("  s->data[i] = s->data[s->len - 1];\n")
+  s.add("  s->len--;\n}\n")
+  # pop (remove and return last)
+  s.add("static inline " & elemType & " " & seqType & "_pop(" & seqType & "* s) {\n")
+  s.add("  return s->data[--s->len];\n}\n")
+  # insert (insert at index, shift right, O(n))
+  s.add("static inline void " & seqType & "_insert(" & seqType & "* s, size_t i, " & elemType & " val) {\n")
+  s.add("  if (s->len == s->cap) {\n")
+  s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
+  s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
+  s.add("  }\n")
+  s.add("  for (size_t j = s->len; j > i; j--) s->data[j] = s->data[j - 1];\n")
+  s.add("  s->data[i] = val;\n  s->len++;\n}\n")
+  # contains (returns bool)
+  s.add("static inline bool " & seqType & "_contains(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return true;\n")
+  s.add("  return false;\n}\n")
+  # find (returns index, -1 if not found)
+  s.add("static inline int64_t " & seqType & "_find(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
+  s.add("  return -1;\n}\n")
   # free
   s.add("static inline void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
   g.pendingSpecializations.add(s)
@@ -500,15 +527,53 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let fa = FieldAccessExpr(c.fn)
       if fa.field == "get" and c.args.len == 0:
         g.genExpr(fa.expr); g.emit(".value"); return
-      # .add(x) on Seq
-      if fa.field == "add" and c.args.len == 1 and fa.expr of IdentExpr:
+      # Seq methods
+      if fa.expr of IdentExpr:
         let varName = IdentExpr(fa.expr).name
         let varType = g.varCType(varName)
         if varType.isSeqType():
-          g.emit(varType & "_add(&" & varName & ", ")
-          g.genExpr(c.args[0].value)
-          g.emit(")")
-          return
+          # .add(x)
+          if fa.field == "add" and c.args.len == 1:
+            g.emit(varType & "_add(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          # .remove(i)
+          if fa.field == "remove" and c.args.len == 1:
+            g.emit(varType & "_remove(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          # .removeSwap(i)
+          if fa.field == "removeSwap" and c.args.len == 1:
+            g.emit(varType & "_removeSwap(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          # .pop()
+          if fa.field == "pop" and c.args.len == 0:
+            g.emit(varType & "_pop(&" & varName & ")")
+            return
+          # .insert(i, value)
+          if fa.field == "insert" and c.args.len == 2:
+            g.emit(varType & "_insert(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(", ")
+            g.genExpr(c.args[1].value)
+            g.emit(")")
+            return
+          # .contains(x)
+          if fa.field == "contains" and c.args.len == 1:
+            g.emit(varType & "_contains(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
+          # .find(x)
+          if fa.field == "find" and c.args.len == 1:
+            g.emit(varType & "_find(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
       if name == "echo":
