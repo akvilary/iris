@@ -16,6 +16,7 @@ type
     name: string
     modifier: DeclModifier
     typeAnn: TypeExpr
+    isHeap: bool  # true for String, Seq, HashTable, HashSet
 
   Scope = object
     vars: Table[string, VarInfo]
@@ -61,6 +62,12 @@ proc lookupVar(ctx: SemaContext, name: string): bool =
       return true
   return false
 
+proc lookupVarInfo(ctx: SemaContext, name: string): VarInfo =
+  for i in countdown(ctx.scopes.len - 1, 0):
+    if name in ctx.scopes[i].vars:
+      return ctx.scopes[i].vars[name]
+  return VarInfo()
+
 proc markInitialized(ctx: var SemaContext, name: string) =
   ctx.initVars.incl(name)
 
@@ -87,6 +94,26 @@ proc typeToStr(t: TypeExpr): string =
   if t of TupleType:
     return "(" & TupleType(t).elems.mapIt(typeToStr(it)).join(", ") & ")"
   return "?"
+
+proc isHeapTypeAnn(t: TypeExpr): bool =
+  ## Check if type annotation is a heap type
+  if t == nil: return false
+  if t of NamedType:
+    return NamedType(t).name == "String"
+  if t of GenericType:
+    let name = GenericType(t).name
+    return name in ["Seq", "HashTable", "HashSet", "Heap"]
+  return false
+
+proc isHeapExpr(e: Expr): bool =
+  ## Check if expression produces a heap value (~ prefix or String literal)
+  if e == nil: return false
+  if e of StrLitExpr or e of StrInterpExpr: return true  # ~"..."
+  if e of SeqLitExpr: return true  # ~[...]
+  if e of HashTableLitExpr: return true  # ~{k: v}
+  if e of HashSetLitExpr: return true  # ~{v}
+  if e of HeapAllocExpr: return true  # ~Type(...)
+  return false
 
 proc isStrType(t: TypeExpr): bool =
   ## Check if type is `str`
@@ -245,8 +272,17 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # Analyze the value expression first (before declaring the var)
     if d.value != nil:
       ctx.analyzeExpr(d.value)
+    # Determine if this is a heap type
+    var heap = isHeapTypeAnn(d.typeAnn) or (d.value != nil and isHeapExpr(d.value))
+    # If assigning from another heap variable — it's a move
+    if d.value != nil and d.value of IdentExpr:
+      let srcName = IdentExpr(d.value).name
+      let srcInfo = ctx.lookupVarInfo(srcName)
+      if srcInfo.isHeap:
+        heap = true
+        ctx.movedVars.incl(srcName)
     # Declare the variable
-    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: d.typeAnn))
+    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: d.typeAnn, isHeap: heap))
     # Mark initialized if it has a value
     if d.value != nil:
       ctx.markInitialized(d.name)
