@@ -438,6 +438,17 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n}\n")
+  # removeIf (returns bool)
+  s.add("static inline bool " & htType & "_removeIf(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("  size_t i=" & htType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) return false;\n")
+  s.add("  s->used[i]=false; s->len--;\n")
+  s.add("  size_t j=i;\n")
+  s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
+  s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
+  s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
+  s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n")
+  s.add("  return true;\n}\n")
   # free
   s.add("static inline void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
   g.pendingSpecializations.add(s)
@@ -488,6 +499,17 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n}\n")
+  # removeIf (returns bool)
+  s.add("static inline bool " & hsType & "_removeIf(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
+  s.add("  if(!s->used[i]) return false;\n")
+  s.add("  s->used[i]=false; s->len--;\n")
+  s.add("  size_t j=i;\n")
+  s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
+  s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
+  s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
+  s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n")
+  s.add("  return true;\n}\n")
   s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
   g.pendingSpecializations.add(s)
 
@@ -744,6 +766,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
             return
         # HashTable methods
         if varType.isHashTableType():
+          if fa.field == "removeIf" and c.args.len == 1:
+            g.emit(varType & "_removeIf(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
           if fa.field == "set" and c.args.len == 2:
             g.emit(varType & "_set(&" & varName & ", ")
             g.genExpr(c.args[0].value)
@@ -763,6 +790,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
             return
         # HashSet methods
         if varType.isHashSetType():
+          if fa.field == "removeIf" and c.args.len == 1:
+            g.emit(varType & "_removeIf(&" & varName & ", ")
+            g.genExpr(c.args[0].value)
+            g.emit(")")
+            return
           if fa.field == "add" and c.args.len == 1:
             g.emit(varType & "_add(&" & varName & ", ")
             g.genExpr(c.args[0].value)
