@@ -108,6 +108,12 @@ proc isHeapTypeAnn(t: TypeExpr): bool =
     return name in ["Seq", "HashTable", "HashSet", "Heap"]
   return false
 
+proc isPartialMove(e: Expr): bool =
+  ## Check if expression is a field access or index into a variable (partial move)
+  if e of FieldAccessExpr: return true
+  if e of IndexExpr: return true
+  return false
+
 proc isHeapExpr(e: Expr): bool =
   ## Check if expression produces a heap value (~ prefix or String literal)
   if e == nil: return false
@@ -314,6 +320,14 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.analyzeExpr(d.value)
     # Determine if this is a heap type
     var heap = isHeapTypeAnn(d.typeAnn) or (d.value != nil and isHeapExpr(d.value))
+    # Partial move check: cannot move a field/element out of a struct/collection
+    if d.value != nil and isPartialMove(d.value):
+      # Check if the source object is heap-owning
+      if d.value of FieldAccessExpr and FieldAccessExpr(d.value).expr of IdentExpr:
+        let srcName = IdentExpr(FieldAccessExpr(d.value).expr).name
+        let srcInfo = ctx.lookupVarInfo(srcName)
+        if srcInfo.isHeap:
+          ctx.error("error: cannot move field out of struct — move the whole value or copy it")
     # If assigning from another heap variable — it's a move
     if d.value != nil and d.value of IdentExpr:
       let srcName = IdentExpr(d.value).name
@@ -364,6 +378,9 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
   elif s of ResultAssignStmt:
     let rs = ResultAssignStmt(s)
     ctx.analyzeExpr(rs.value)
+    # Partial move check: cannot move a field/element out of a struct/collection
+    if isPartialMove(rs.value):
+      ctx.error("error: cannot move field out of struct — move the whole value or copy it")
     # Type check: owned type cannot be returned as view/str
     if ctx.currentFnReturnsBorrow and rs.value of IdentExpr:
       let srcName = IdentExpr(rs.value).name

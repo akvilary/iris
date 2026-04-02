@@ -68,7 +68,7 @@ proc compileToC(source: string, baseDir: string, filename: string = ""): string 
     if not isFromImport:
       gen.importedModules.add(shortName)
       # Map short name to sanitized prefix for C name generation
-      gen.nameAliases["__mod_" & shortName] = prefix
+      gen.nameAliases["iris_mod_" & shortName] = prefix
 
     # Collect public names for access checking
     var pubNames: seq[string]

@@ -62,7 +62,7 @@ proc emitLine*(g: var CodeGen, s: string) =
 
 proc nextTmp(g: var CodeGen): string =
   g.tmpCounter += 1
-  "__destruct_" & $g.tmpCounter
+  "iris_destruct_" & $g.tmpCounter
 
 # ── Type mapping ──
 
@@ -98,7 +98,7 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
     elif gt.name == "HashSet" and gt.args.len == 1:
       "iris_HS_" & g.typeToCStr(gt.args[0])
     elif gt.name == "array" and gt.args.len == 2:
-      "__array_" & g.typeToCStr(gt.args[0]) & "_" & g.typeToCStr(gt.args[1])
+      "iris_array_" & g.typeToCStr(gt.args[0]) & "_" & g.typeToCStr(gt.args[1])
     else:
       gt.name & "_" & gt.args.mapIt(g.typeToCStr(it)).join("_")
   elif t of FuncType:
@@ -114,13 +114,13 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
 proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
 
-proc isArrayType(ct: string): bool = ct.startsWith("__array_")
+proc isArrayType(ct: string): bool = ct.startsWith("iris_array_")
 proc isSeqType(ct: string): bool = ct.startsWith("iris_Seq_")
 proc isHashTableType(ct: string): bool = ct.startsWith("iris_HT_")
 proc isHashSetType(ct: string): bool = ct.startsWith("iris_HS_")
 
 proc arrayElemType(ct: string): string =
-  let rest = ct[8..^1]  # strip "__array_"
+  let rest = ct[11..^1]  # strip "iris_array_"
   let i = rest.rfind('_')
   rest[0..<i]
 
@@ -146,6 +146,79 @@ proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
 proc isHeapType(ct: string): bool =
   ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_")
 
+proc needsFree(g: CodeGen, ct: string): bool =
+  ## Recursively check if a C type needs freeing (like Rust's Drop)
+  if ct.isHeapType(): return true
+  if ct in g.typeFields:
+    for f in g.typeFields[ct]:
+      if g.needsFree(f.ctype): return true
+  return false
+
+proc freeExprStr(g: CodeGen, expr: string, ct: string): string =
+  ## Return a C statement that frees expr of type ct
+  if ct == "iris_String":
+    return "free(" & expr & ".data);"
+  elif ct.isSeqType():
+    return ct & "_free(&" & expr & ");"
+  elif ct.isHashTableType():
+    return ct & "_free(&" & expr & ");"
+  elif ct.isHashSetType():
+    return ct & "_free(&" & expr & ");"
+  elif ct.startsWith("iris_Heap_"):
+    let innerType = ct[10..^1]
+    if g.needsFree(innerType):
+      return ct & "_free(" & expr & ");"
+    else:
+      return "free(" & expr & ");"
+  elif ct in g.typeFields:
+    return ct & "_free(&" & expr & ");"
+  return ""
+
+proc emitStructFree(g: var CodeGen, typeName: string) =
+  ## Generate a _free function for struct/error/tuple with heap fields
+  if typeName notin g.typeFields: return
+  let fields = g.typeFields[typeName]
+  var hasFreeable = false
+  for f in fields:
+    if g.needsFree(f.ctype): hasFreeable = true; break
+  if not hasFreeable: return
+  # Check if this is a variant type
+  let hasVariant = typeName in g.variantInfo
+  var variantFieldNames: seq[string]
+  if hasVariant:
+    for vf in g.variantInfo[typeName].fields:
+      variantFieldNames.add(vf.fieldName)
+  var s = "static inline void " & typeName & "_free(" & typeName & "* self) {\n"
+  # Free non-variant fields
+  for f in fields:
+    if f.name in variantFieldNames: continue
+    if g.needsFree(f.ctype):
+      s.add("  " & g.freeExprStr("self->" & f.name, f.ctype) & "\n")
+  # Free variant fields via switch
+  if hasVariant:
+    let vi = g.variantInfo[typeName]
+    var branchHasHeap = false
+    for vf in vi.fields:
+      for f in fields:
+        if f.name == vf.fieldName and g.needsFree(f.ctype):
+          branchHasHeap = true; break
+    if branchHasHeap:
+      s.add("  switch (self->" & vi.tagName & ") {\n")
+      # Group fields by branch value
+      for vf in vi.fields:
+        var fCtype = ""
+        for f in fields:
+          if f.name == vf.fieldName: fCtype = f.ctype; break
+        if fCtype.len > 0 and g.needsFree(fCtype):
+          for bv in vf.branchValues:
+            s.add("    case " & vi.tagType & "_" & bv & ":\n")
+            s.add("      " & g.freeExprStr("self->" & vf.fieldName, fCtype) & "\n")
+            s.add("      break;\n")
+      s.add("    default: break;\n")
+      s.add("  }\n")
+  s.add("}\n\n")
+  g.pendingSpecializations.add(s)
+
 proc needsRefParam(ct: string): bool =
   ## Types that should be passed by pointer for mut params
   ct.isHeapType() or ct.isArrayType() or ct == "iris_str" or ct == "iris_view_String"
@@ -168,16 +241,10 @@ proc emitScopeCleanup(g: var CodeGen) =
     let name = vars[i]
     if name in g.movedVars: continue
     let ct = g.varCType(name)
-    if ct == "iris_String":
-      g.emitLine("free(" & name & ".data);")
-    elif ct.isSeqType():
-      g.emitLine(ct & "_free(&" & name & ");")
-    elif ct.isHashTableType():
-      g.emitLine(ct & "_free(&" & name & ");")
-    elif ct.isHashSetType():
-      g.emitLine(ct & "_free(&" & name & ");")
-    elif ct.startsWith("iris_Heap_"):
-      g.emitLine("free(" & name & ");")
+    if g.needsFree(ct):
+      let stmt = g.freeExprStr(name, ct)
+      if stmt.len > 0:
+        g.emitLine(stmt)
 
 proc popScope(g: var CodeGen) =
   if g.scopeVars.len > 0:
@@ -319,7 +386,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
                 else: "int64_t"
     let size = if a.fillCount != nil and a.fillCount of IntLitExpr: $IntLitExpr(a.fillCount).val
                else: $a.elems.len
-    return "__array_" & elemT & "_" & size
+    return "iris_array_" & elemT & "_" & size
   if e of SeqLitExpr:
     let s = SeqLitExpr(e)
     let elemT = if s.fillValue != nil: g.inferCType(s.fillValue)
@@ -421,7 +488,7 @@ proc inferCType(g: CodeGen, e: Expr): string =
 proc ensureOptionType(g: var CodeGen, valType, optType: string)
 
 proc ensureArrayType(g: var CodeGen, elemType, size: string) =
-  let arrType = "__array_" & elemType & "_" & size
+  let arrType = "iris_array_" & elemType & "_" & size
   if arrType in g.emittedSeqTypes: return  # reuse the same tracking list
   g.emittedSeqTypes.add(arrType)
   var s = ""
@@ -522,7 +589,18 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n")
   s.add("  return true;\n}\n")
   # free
-  s.add("static inline void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
+  if g.needsFree(keyType) or g.needsFree(valType):
+    s.add("static inline void " & htType & "_free(" & htType & "* s) {\n")
+    s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
+    s.add("    if (s->used[i]) {\n")
+    if g.needsFree(keyType):
+      s.add("      " & g.freeExprStr("s->keys[i]", keyType) & "\n")
+    if g.needsFree(valType):
+      s.add("      " & g.freeExprStr("s->vals[i]", valType) & "\n")
+    s.add("    }\n  }\n")
+    s.add("  free(s->used); free(s->keys); free(s->vals);\n}\n\n")
+  else:
+    s.add("static inline void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
   g.pendingSpecializations.add(s)
 
 proc ensureHashSetType(g: var CodeGen, elemType: string) =
@@ -582,7 +660,14 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n")
   s.add("  return true;\n}\n")
-  s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
+  if g.needsFree(elemType):
+    s.add("static inline void " & hsType & "_free(" & hsType & "* s) {\n")
+    s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
+    s.add("    if (s->used[i]) " & g.freeExprStr("s->keys[i]", elemType) & "\n")
+    s.add("  }\n")
+    s.add("  free(s->used); free(s->keys);\n}\n\n")
+  else:
+    s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
   g.pendingSpecializations.add(s)
 
 proc ensureHeapType(g: var CodeGen, innerType: string) =
@@ -593,7 +678,21 @@ proc ensureHeapType(g: var CodeGen, innerType: string) =
   s.add("typedef " & innerType & "* " & heapType & ";\n")
   s.add("static inline " & heapType & " " & heapType & "_alloc(" & innerType & " val) {\n")
   s.add("  " & innerType & "* p = (" & innerType & "*)malloc(sizeof(" & innerType & "));\n")
-  s.add("  *p = val;\n  return p;\n}\n\n")
+  s.add("  *p = val;\n  return p;\n}\n")
+  if g.needsFree(innerType):
+    s.add("static inline void " & heapType & "_free(" & heapType & " p) {\n")
+    if innerType in g.typeFields:
+      s.add("  " & innerType & "_free(p);\n")
+    elif innerType == "iris_String":
+      s.add("  free(p->data);\n")
+    elif innerType.isSeqType():
+      s.add("  " & innerType & "_free(p);\n")
+    elif innerType.isHashTableType():
+      s.add("  " & innerType & "_free(p);\n")
+    elif innerType.isHashSetType():
+      s.add("  " & innerType & "_free(p);\n")
+    s.add("  free(p);\n}\n")
+  s.add("\n")
   g.pendingSpecializations.add(s)
 
 proc ensureSeqType(g: var CodeGen, elemType: string) =
@@ -649,7 +748,12 @@ proc ensureSeqType(g: var CodeGen, elemType: string) =
   s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
   s.add("  return -1;\n}\n")
   # free
-  s.add("static inline void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
+  if g.needsFree(elemType):
+    s.add("static inline void " & seqType & "_free(" & seqType & "* s) {\n")
+    s.add("  for (size_t i = 0; i < s->len; i++) " & g.freeExprStr("s->data[i]", elemType) & "\n")
+    s.add("  free(s->data); s->data = NULL; s->len = 0; s->cap = 0;\n}\n\n")
+  else:
+    s.add("static inline void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
   g.pendingSpecializations.add(s)
 
 # ── Expression codegen ──
@@ -722,24 +826,24 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     # Non-trivial expression returning string — use temp variable
     # (IdentExpr is handled in genEchoArg, literals handled above)
     if ct in ["iris_str", "iris_view_String", "iris_String"] and not (e of IdentExpr):
-      g.emit("{ " & ct & " __echo_tmp = ")
+      g.emit("{ " & ct & " iris_echo_tmp = ")
       g.genExpr(e)
-      g.emit("; printf(\"%.*s\\n\", (int)__echo_tmp.len, __echo_tmp.data); }")
+      g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data); }")
     elif ct.isSeqType() and e of IdentExpr:
       let name = IdentExpr(e).name
       let elemType = seqElemType(ct)
       g.emit("{ printf(\"[\"); ")
-      g.emit("for (int64_t __i = 0; __i < " & name & ".len; __i++) { ")
-      g.emit("if (__i > 0) printf(\", \"); ")
+      g.emit("for (int64_t iris_i = 0; iris_i < " & name & ".len; iris_i++) { ")
+      g.emit("if (iris_i > 0) printf(\", \"); ")
       case elemType
       of "double", "float":
-        g.emit("printf(\"%g\", " & name & ".data[__i]); ")
+        g.emit("printf(\"%g\", " & name & ".data[iris_i]); ")
       of "bool":
-        g.emit("printf(\"%s\", " & name & ".data[__i] ? \"true\" : \"false\"); ")
+        g.emit("printf(\"%s\", " & name & ".data[iris_i] ? \"true\" : \"false\"); ")
       of "iris_str", "iris_view_String", "iris_String":
-        g.emit("printf(\"%.*s\", (int)" & name & ".data[__i].len, " & name & ".data[__i].data); ")
+        g.emit("printf(\"%.*s\", (int)" & name & ".data[iris_i].len, " & name & ".data[iris_i].data); ")
       else:
-        g.emit("printf(\"%lld\", (long long)" & name & ".data[__i]); ")
+        g.emit("printf(\"%lld\", (long long)" & name & ".data[iris_i]); ")
       g.emit("} printf(\"]\\n\"); }")
     else:
       let (fmt, needsCast) = g.printfFormat(e)
@@ -1056,9 +1160,9 @@ proc genExpr(g: var CodeGen, e: Expr) =
           let ret = if specReturn != nil: g.typeToCStr(specReturn) else: "void"
           g.emit(ret & " " & specName & "(" & g.formatParams(specParams) & ") {\n")
           g.indent = 1
-          if specReturn != nil: g.emitLine(ret & " __result;")
+          if specReturn != nil: g.emitLine(ret & " iris_result;")
           for st in gf.body: g.genStmt(st)
-          if specReturn != nil: g.emitLine("return __result;")
+          if specReturn != nil: g.emitLine("return iris_result;")
           g.indent = 0
           g.emit("}\n\n")
           g.pendingSpecializations.add(g.output)
@@ -1114,7 +1218,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
           if f.field notin g.modulePublicNames[name]:
             raise newException(ValueError,
               "error: '" & f.field & "' is not public in module '" & name & "'")
-        let prefix = g.nameAliases.getOrDefault("__mod_" & name, name)
+        let prefix = g.nameAliases.getOrDefault("iris_mod_" & name, name)
         g.emit(prefix & "_" & f.field); return
       let varType = g.varCType(name)
       let acc = if name in g.refVars or varType.startsWith("iris_Heap_"): "->" else: "."
@@ -1198,7 +1302,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
                    else: "int64_t"
     let size = if a.fillCount != nil and a.fillCount of IntLitExpr: $IntLitExpr(a.fillCount).val
                else: $a.elems.len
-    let arrType = "__array_" & elemType & "_" & size
+    let arrType = "iris_array_" & elemType & "_" & size
     g.ensureArrayType(elemType, size)
     if a.fillValue != nil:
       if a.fillValue of IntLitExpr and IntLitExpr(a.fillValue).val == 0:
@@ -1252,16 +1356,15 @@ proc genExpr(g: var CodeGen, e: Expr) =
     if ht.entries.len == 0:
       g.emit(htType & "_new(8)")
     else:
-      # Create table and insert entries via a compound expression
-      let tmp = "__ht_" & $g.tmpCounter; g.tmpCounter += 1
-      g.emit("({" & htType & " " & tmp & "=" & htType & "_new(" & $(ht.entries.len * 2) & ");")
+      let tmp = "iris_ht_" & $g.tmpCounter; g.tmpCounter += 1
+      g.emitLine(htType & " " & tmp & " = " & htType & "_new(" & $(ht.entries.len * 2) & ");")
       for entry in ht.entries:
-        g.emit(htType & "_set(&" & tmp & ",")
+        g.emitIndent(); g.emit(htType & "_set(&" & tmp & ", ")
         g.genExpr(entry.key)
-        g.emit(",")
+        g.emit(", ")
         g.genExpr(entry.value)
-        g.emit(");")
-      g.emit(tmp & ";})")
+        g.emit(");\n")
+      g.emitIndent(); g.emit(tmp)
   elif e of HashSetLitExpr:
     let hs = HashSetLitExpr(e)
     let et = if hs.elems.len > 0: g.inferCType(hs.elems[0]) else: "int64_t"
@@ -1270,13 +1373,13 @@ proc genExpr(g: var CodeGen, e: Expr) =
     if hs.elems.len == 0:
       g.emit(hsType & "_new(8)")
     else:
-      let tmp = "__hs_" & $g.tmpCounter; g.tmpCounter += 1
-      g.emit("({" & hsType & " " & tmp & "=" & hsType & "_new(" & $(hs.elems.len * 2) & ");")
+      let tmp = "iris_hs_" & $g.tmpCounter; g.tmpCounter += 1
+      g.emitLine(hsType & " " & tmp & " = " & hsType & "_new(" & $(hs.elems.len * 2) & ");")
       for el in hs.elems:
-        g.emit(hsType & "_add(&" & tmp & ",")
+        g.emitIndent(); g.emit(hsType & "_add(&" & tmp & ", ")
         g.genExpr(el)
-        g.emit(");")
-      g.emit(tmp & ";})")
+        g.emit(");\n")
+      g.emitIndent(); g.emit(tmp)
   elif e of HeapAllocExpr:
     let ha = HeapAllocExpr(e)
     let typeName = if ha.inner.fn of IdentExpr: IdentExpr(ha.inner.fn).name
@@ -1343,7 +1446,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.emit(")")
   elif e of LambdaExpr:
     let lam = LambdaExpr(e)
-    let name = "__lambda_" & $g.tmpCounter; g.tmpCounter += 1
+    let name = "iris_lambda_" & $g.tmpCounter; g.tmpCounter += 1
     let ret = if lam.returnType != nil: g.typeToCStr(lam.returnType) else: "void"
     var paramStrs: seq[string]
     for p in lam.params:
@@ -1443,23 +1546,48 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if ctype.isHashSetType():
       g.ensureHashSetType(hsElemType(ctype))
     g.varTypes[d.name] = ctype
-    if ctype.isHeapType():
+    if g.needsFree(ctype):
       g.trackVar(d.name)
     g.emitIndent()
     if d.value == nil:
       # Declaration without value: @x int — assigned later
       g.emit(ctype & " " & d.name & ";\n")
     else:
-      case d.modifier
-      of declDefault, declConst:
-        if ctype.isHeapType():
+      # HashTable/HashSet literals with entries: declare then populate
+      if d.value of HashTableLitExpr and HashTableLitExpr(d.value).entries.len > 0:
+        let ht = HashTableLitExpr(d.value)
+        let kt = g.inferCType(ht.entries[0].key)
+        let vt = g.inferCType(ht.entries[0].value)
+        let htType = "iris_HT_" & kt & "__" & vt
+        g.ensureHashTableType(kt, vt)
+        g.emit(ctype & " " & d.name & " = " & htType & "_new(" & $(ht.entries.len * 2) & ");\n")
+        for entry in ht.entries:
+          g.emitIndent(); g.emit(htType & "_set(&" & d.name & ", ")
+          g.genExpr(entry.key)
+          g.emit(", ")
+          g.genExpr(entry.value)
+          g.emit(");\n")
+      elif d.value of HashSetLitExpr and HashSetLitExpr(d.value).elems.len > 0:
+        let hs = HashSetLitExpr(d.value)
+        let et = g.inferCType(hs.elems[0])
+        let hsType = "iris_HS_" & et
+        g.ensureHashSetType(et)
+        g.emit(ctype & " " & d.name & " = " & hsType & "_new(" & $(hs.elems.len * 2) & ");\n")
+        for el in hs.elems:
+          g.emitIndent(); g.emit(hsType & "_add(&" & d.name & ", ")
+          g.genExpr(el)
+          g.emit(");\n")
+      else:
+        case d.modifier
+        of declDefault, declConst:
+          if g.needsFree(ctype):
+            g.emit(ctype & " " & d.name & " = ")
+          else:
+            g.emit("const " & ctype & " " & d.name & " = ")
+        of declMut:
           g.emit(ctype & " " & d.name & " = ")
-        else:
-          g.emit("const " & ctype & " " & d.name & " = ")
-      of declMut:
-        g.emit(ctype & " " & d.name & " = ")
-      g.genExpr(d.value)
-      g.emit(";\n")
+        g.genExpr(d.value)
+        g.emit(";\n")
 
   elif s of DestructDeclStmt:
     let dd = DestructDeclStmt(s)
@@ -1572,9 +1700,9 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if rs.field.len > 0:
       g.emitIndent()
       if g.inResultFunc:
-        g.emit("__result.value." & rs.field & " = ")
+        g.emit("iris_result.value." & rs.field & " = ")
       else:
-        g.emit("__result." & rs.field & " = ")
+        g.emit("iris_result." & rs.field & " = ")
       g.genExpr(rs.value); g.emit(";\n")
       return
     # result = Error(...)
@@ -1583,18 +1711,18 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let name = IdentExpr(CallExpr(val).fn).name
       if name in g.errorNames:
         g.emitIndent()
-        g.emit("__result.kind = " & g.currentResultName & "_" & name & ";\n")
+        g.emit("iris_result.kind = " & g.currentResultName & "_" & name & ";\n")
         g.emitIndent()
-        g.emit("__result." & name & "_err = ")
+        g.emit("iris_result." & name & "_err = ")
         g.genExpr(val)
         g.emit(";\n")
         return
     # result = value
     g.emitIndent()
     if g.inResultFunc:
-      g.emit("__result.value = ")
+      g.emit("iris_result.value = ")
     else:
-      g.emit("__result = ")
+      g.emit("iris_result = ")
     g.genExpr(val); g.emit(";\n")
     # Track moved variable (ownership transfer to result)
     if val of IdentExpr:
@@ -1650,8 +1778,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       # Function returns Result struct
       g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
-      g.emitLine(resultName & " __result;")
-      g.emitLine("__result.kind = " & resultName & "_Ok;")
+      g.emitLine(resultName & " iris_result;")
+      g.emitLine("iris_result.kind = " & resultName & "_Ok;")
       g.inResultFunc = true
       g.currentResultName = resultName
       let savedMoved = g.movedVars
@@ -1663,7 +1791,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
-        if p.modifier == paramOwn and ct.isHeapType():
+        if p.modifier == paramOwn and g.needsFree(ct):
           g.trackVar(p.name)
         if p.modifier == paramMut and needsRefParam(ct):
           g.refVars.incl(p.name)
@@ -1673,14 +1801,14 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.refVars = savedRefs
       g.movedVars = savedMoved
       g.inResultFunc = false
-      g.emitLine("return __result;")
+      g.emitLine("return iris_result;")
       g.indent -= 1
       g.emit("}\n")
     else:
       let ret = if hasReturn: g.typeToCStr(f.returnType) else: "void"
       g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
-      if hasReturn: g.emitLine(ret & " __result;")
+      if hasReturn: g.emitLine(ret & " iris_result;")
       let savedMoved = g.movedVars
       g.movedVars = @[]
       g.pushScope()
@@ -1690,7 +1818,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
-        if p.modifier == paramOwn and ct.isHeapType():
+        if p.modifier == paramOwn and g.needsFree(ct):
           g.trackVar(p.name)
         if p.modifier == paramMut and needsRefParam(ct):
           g.refVars.incl(p.name)
@@ -1699,7 +1827,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.popScope()
       g.refVars = savedRefs
       g.movedVars = savedMoved
-      if hasReturn: g.emitLine("return __result;")
+      if hasReturn: g.emitLine("return iris_result;")
       g.indent -= 1
       g.emit("}\n")
 
@@ -1749,7 +1877,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     elif f.iter of IdentExpr:
       let iterName = IdentExpr(f.iter).name
       let iterType = g.varCType(iterName)
-      let idx = "__i_" & f.varName
+      let idx = "iris_i_" & f.varName
       if iterType.isSeqType():
         let elemT = seqElemType(iterType)
         g.varTypes[f.varName] = elemT
@@ -1796,7 +1924,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else: g.emitLine("continue;")
 
   elif s of ReturnStmt:
-    g.emitLine("return __result;")
+    g.emitLine("return iris_result;")
 
   elif s of ExprStmt:
     g.emitIndent(); g.genExpr(ExprStmt(s).expr); g.emit(";\n")
@@ -2066,7 +2194,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.indent -= 1
     else:
       # Exhaustive — hint to C compiler that all cases are covered
-      g.emitLine("default: __builtin_unreachable();")
+      g.emitLine("default: abort();")
     g.indent -= 1
     g.emitLine("}")
 
@@ -2208,6 +2336,23 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
     if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt:
       g.genStmt(s); g.emit("\n")
 
+  # Generate _free forward declarations and bodies for struct types with heap fields
+  var typesNeedingFree: seq[string]
+  for s in stmts:
+    var name = ""
+    if s of ObjectDeclStmt: name = ObjectDeclStmt(s).name
+    elif s of ErrorDeclStmt: name = ErrorDeclStmt(s).name
+    elif s of TupleDeclStmt: name = TupleDeclStmt(s).name
+    if name.len > 0 and name in g.typeFields and g.needsFree(name):
+      typesNeedingFree.add(name)
+  # Forward declarations
+  for name in typesNeedingFree:
+    g.emit("static inline void " & name & "_free(" & name & "* self);\n")
+  if typesNeedingFree.len > 0: g.emit("\n")
+  # Bodies
+  for name in typesNeedingFree:
+    g.emitStructFree(name)
+
   # Pre-emit Seq/array types referenced in function signatures
   for s in stmts:
     if s of FnDeclStmt:
@@ -2310,6 +2455,21 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
     if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt:
       g.genStmt(s); g.emit("\n")
 
+  # Generate _free for struct types with heap fields
+  var modTypesNeedingFree: seq[string]
+  for s in stmts:
+    var name = ""
+    if s of ObjectDeclStmt: name = ObjectDeclStmt(s).name
+    elif s of ErrorDeclStmt: name = ErrorDeclStmt(s).name
+    elif s of TupleDeclStmt: name = TupleDeclStmt(s).name
+    if name.len > 0 and name in g.typeFields and g.needsFree(name):
+      modTypesNeedingFree.add(name)
+  for name in modTypesNeedingFree:
+    g.emit("static inline void " & name & "_free(" & name & "* self);\n")
+  if modTypesNeedingFree.len > 0: g.emit("\n")
+  for name in modTypesNeedingFree:
+    g.emitStructFree(name)
+
   # Forward declarations + result structs
   for s in stmts:
     if s of FnDeclStmt:
@@ -2331,9 +2491,9 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
       if not f.public: g.emit("static ")
       g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
-      if hasReturn: g.emitLine(ret & " __result;")
+      if hasReturn: g.emitLine(ret & " iris_result;")
       for st in f.body: g.genStmt(st)
-      if hasReturn: g.emitLine("return __result;")
+      if hasReturn: g.emitLine("return iris_result;")
       g.indent -= 1
       g.emit("}\n\n")
 
