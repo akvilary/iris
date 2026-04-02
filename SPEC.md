@@ -505,7 +505,7 @@ lives on the stack — only the data is in heap. This is explicit:
 @user Heap[User] = ~User(name=~"Andrey")      # object in heap
 
 # Heap via Pool — explicit arena allocation
-@pool = newPool()
+@pool = Pool()
 @node = pool.alloc(HugeNode(...))     # data in pool's heap arena
 ```
 
@@ -720,12 +720,12 @@ but arena-based). Covers all heap use cases:
 - **Cyclic references** — A references B and B references A
 - **Long-lived data** — data that must outlive the creating function
 
-`Pool` is created with `newPool()`. All data allocated through a pool
+`Pool` is created with `Pool()`. All data allocated through a pool
 is freed in O(1) when the pool goes out of scope.
 
 ```
 # Large object — put in heap to avoid stack overflow:
-@pool = newPool()
+@pool = Pool()
 @buf = pool.alloc(HugeBuffer(size=1_000_000))
 process(buf)
 # <- pool goes out of scope, buf freed
@@ -737,7 +737,7 @@ process(buf)
 
 # Cyclic references:
 @buildDom func() ok String:
-  @pool = newPool()
+  @pool = Pool()
   @parent = pool.alloc(Element("div"))
   @child = pool.alloc(Element("span"))
   parent.addChild(child)    # parent -> child
@@ -766,7 +766,7 @@ If not — they are independent and live in separate pools.
 
 ```
 # Create pool, build graph, use it, pass further
-@pool = newPool()
+@pool = Pool()
 @root = buildGraph(pool)
 traverse(root)
 printTree(root)
@@ -790,11 +790,11 @@ printTree(root)
   *echo("Tree root: {node.name}")
 
 # Two independent graphs — two separate pools
-@userPool = newPool()
+@userPool = Pool()
 @users = buildUserGraph(userPool)
 processUsers(users)
 
-@rolePool = newPool()
+@rolePool = Pool()
 @roles = buildRoleGraph(rolePool)
 processRoles(roles)
 

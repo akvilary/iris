@@ -35,6 +35,8 @@ Minimal compiler that can compile basic Iris programs to C.
 - [x] Semantic analyzer (between parser and codegen)
 - [x] Reject view[T] in object/error/tuple fields
 - [x] Assigned-before-use check (no zero-init)
+- [ ] Lambdas without capture (func as argument, no environment)
+- [ ] Closures with capture (heap environment struct, by reference)
 - [ ] Reject view[T] in closure captures
 - [ ] Ownership + borrow checker (immutable borrow, mut, own)
 - [ ] Lifetime inference (3 rules, no annotations)

@@ -96,6 +96,11 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
       "__array_" & g.typeToCStr(gt.args[0]) & "_" & g.typeToCStr(gt.args[1])
     else:
       gt.name & "_" & gt.args.mapIt(g.typeToCStr(it)).join("_")
+  elif t of FuncType:
+    let ft = FuncType(t)
+    let ret = if ft.returnType != nil: g.typeToCStr(ft.returnType) else: "void"
+    let params = ft.paramTypes.mapIt(g.typeToCStr(it)).join(", ")
+    ret & "(*)(" & (if params.len > 0: params else: "void") & ")"
   elif t of TupleType:
     "/* tuple type */"
   else:
@@ -200,9 +205,18 @@ proc escapeC(s: string): string =
     of '%': result.add("%%")
     else: result.add(ch)
 
+proc formatParam(g: CodeGen, p: Param): string =
+  if p.typeAnn of FuncType:
+    let ft = FuncType(p.typeAnn)
+    let ret = if ft.returnType != nil: g.typeToCStr(ft.returnType) else: "void"
+    let fparams = ft.paramTypes.mapIt(g.typeToCStr(it)).join(", ")
+    ret & "(*" & p.name & ")(" & (if fparams.len > 0: fparams else: "void") & ")"
+  else:
+    g.typeToCStr(p.typeAnn) & " " & p.name
+
 proc formatParams*(g: CodeGen, params: seq[Param]): string =
   if params.len == 0: return "void"
-  params.mapIt(g.typeToCStr(it.typeAnn) & " " & it.name).join(", ")
+  params.mapIt(g.formatParam(it)).join(", ")
 
 proc inferCType(g: CodeGen, e: Expr): string
 
@@ -334,6 +348,11 @@ proc inferCType(g: CodeGen, e: Expr): string =
       if varType.isArrayType(): return arrayElemType(varType)
       if varType.isSeqType(): return seqElemType(varType)
       if varType.isHashTableType(): return htValType(varType)
+  if e of LambdaExpr:
+    let lam = LambdaExpr(e)
+    let ret = if lam.returnType != nil: g.typeToCStr(lam.returnType) else: "void"
+    let params = lam.params.mapIt(g.typeToCStr(it.typeAnn)).join(", ")
+    return ret & "(*)(" & (if params.len > 0: params else: "void") & ")"
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   if e of IfExpr:
@@ -1211,6 +1230,43 @@ proc genExpr(g: var CodeGen, e: Expr) =
     if ce.elseValue != nil:
       g.genExpr(ce.elseValue)
     g.emit(")")
+  elif e of LambdaExpr:
+    let lam = LambdaExpr(e)
+    let name = "__lambda_" & $g.tmpCounter; g.tmpCounter += 1
+    let ret = if lam.returnType != nil: g.typeToCStr(lam.returnType) else: "void"
+    var paramStrs: seq[string]
+    for p in lam.params:
+      paramStrs.add(g.typeToCStr(p.typeAnn) & " " & p.name)
+    let params = if paramStrs.len > 0: paramStrs.join(", ") else: "void"
+    # Generate function into pendingSpecializations
+    var fn = ""
+    fn.add("static inline " & ret & " " & name & "(" & params & ") {\n")
+    if ret != "void":
+      fn.add("  return ")
+    else:
+      fn.add("  ")
+    # Generate body expression into a temporary buffer
+    let origOutput = g.output
+    g.output = ""
+    # Set up param types for inference
+    var savedTypes: seq[(string, string)]
+    for p in lam.params:
+      let ct = g.typeToCStr(p.typeAnn)
+      if p.name in g.varTypes:
+        savedTypes.add((p.name, g.varTypes[p.name]))
+      else:
+        savedTypes.add((p.name, ""))
+      g.varTypes[p.name] = ct
+    g.genExpr(lam.body)
+    let bodyCode = g.output
+    g.output = origOutput
+    # Restore var types
+    for (n, v) in savedTypes:
+      if v.len > 0: g.varTypes[n] = v
+      else: g.varTypes.del(n)
+    fn.add(bodyCode & ";\n}\n")
+    g.pendingSpecializations.add(fn)
+    g.emit(name)
   else:
     g.emit("/* expr not implemented */")
 

@@ -177,6 +177,11 @@ type
     branches*: seq[CaseExprBranch]
     elseValue*: Expr
 
+  LambdaExpr* = ref object of Expr
+    params*: seq[Param]
+    returnType*: TypeExpr
+    body*: Expr
+
   # ── Type expressions ──
 
   TypeExpr* = ref object of RootObj
@@ -190,6 +195,10 @@ type
 
   TupleType* = ref object of TypeExpr
     elems*: seq[TypeExpr]
+
+  FuncType* = ref object of TypeExpr
+    paramTypes*: seq[TypeExpr]
+    returnType*: TypeExpr  # nil = void
 
   # ── Statements ──
 

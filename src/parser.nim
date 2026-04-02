@@ -93,6 +93,21 @@ proc tryParseIdent(P: var Parser): string =
 proc parseType*(P: var Parser): TypeExpr
 
 proc parseType*(P: var Parser): TypeExpr =
+  # func(Type, Type) ok ReturnType — function type
+  if P.at(tkFunc):
+    discard P.advance()
+    P.expect(tkLParen)
+    var paramTypes: seq[TypeExpr]
+    while not P.at(tkRParen) and not P.at(tkEof):
+      paramTypes.add(P.parseType())
+      if P.at(tkComma): discard P.advance()
+    P.expect(tkRParen)
+    var returnType: TypeExpr = nil
+    if P.at(tkOk):
+      discard P.advance()
+      returnType = P.parseType()
+    return FuncType(paramTypes: paramTypes, returnType: returnType)
+
   # (Type, Type) — tuple type
   if P.at(tkLParen):
     discard P.advance()
@@ -451,6 +466,28 @@ proc parsePrimary(P: var Parser): Expr =
       fn: IdentExpr(name: if isSome: "some" else: "none"),
       args: @[CallArg(value: arg)]
     )
+  of tkFunc:
+    # Lambda: func(@x int, @y int) ok int = expr
+    discard P.advance()
+    P.expect(tkLParen)
+    var params: seq[Param]
+    while not P.at(tkRParen) and not P.at(tkEof):
+      let name = P.parseAtIdent()
+      let modifier = case P.peek()
+        of tkMut: discard P.advance(); paramMut
+        of tkOwn: discard P.advance(); paramOwn
+        else: paramDefault
+      let typeAnn = P.parseType()
+      params.add(Param(name: name, modifier: modifier, typeAnn: typeAnn))
+      if P.at(tkComma): discard P.advance()
+    P.expect(tkRParen)
+    var returnType: TypeExpr = nil
+    if P.at(tkOk):
+      discard P.advance()
+      returnType = P.parseType()
+    P.expect(tkEq)
+    let body = P.parseExpr()
+    LambdaExpr(params: params, returnType: returnType, body: body)
   else:
     P.error("unexpected token " & $P.peek())
     nil
