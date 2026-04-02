@@ -188,7 +188,7 @@ proc emitStructFree(g: var CodeGen, typeName: string) =
   if hasVariant:
     for vf in g.variantInfo[typeName].fields:
       variantFieldNames.add(vf.fieldName)
-  var s = "static inline void " & typeName & "_free(" & typeName & "* self) {\n"
+  var s = "static void " & typeName & "_free(" & typeName & "* self) {\n"
   # Free non-variant fields
   for f in fields:
     if f.name in variantFieldNames: continue
@@ -530,19 +530,19 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   # Struct: parallel arrays for used flags, keys, values
   s.add("typedef struct { bool* used; " & keyType & "* keys; " & valType & "* vals; size_t cap; size_t len; } " & htType & ";\n")
   # Create with capacity
-  s.add("static inline " & htType & " " & htType & "_new(size_t cap) {\n")
+  s.add("static " & htType & " " & htType & "_new(size_t cap) {\n")
   s.add("  if(cap<8) cap=8;\n")
   s.add("  bool* u=(bool*)calloc(cap,sizeof(bool));\n")
   s.add("  " & keyType & "* k=(" & keyType & "*)calloc(cap,sizeof(" & keyType & "));\n")
   s.add("  " & valType & "* v=(" & valType & "*)calloc(cap,sizeof(" & valType & "));\n")
   s.add("  return (" & htType & "){u,k,v,cap,0};\n}\n")
   # Internal find slot
-  s.add("static inline size_t " & htType & "_findslot(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static size_t " & htType & "_findslot(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
   s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
   s.add("  return i;\n}\n")
   # Grow
-  s.add("static inline void " & htType & "_grow(" & htType & "* s) {\n")
+  s.add("static void " & htType & "_grow(" & htType & "* s) {\n")
   s.add("  size_t oldcap=s->cap; bool* ou=s->used; " & keyType & "* ok=s->keys; " & valType & "* ov=s->vals;\n")
   s.add("  s->cap*=2; s->len=0;\n")
   s.add("  s->used=(bool*)calloc(s->cap,sizeof(bool));\n")
@@ -551,21 +551,21 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & htType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->vals[j]=ov[i]; s->len++; }\n")
   s.add("  free(ou); free(ok); free(ov);\n}\n")
   # set
-  s.add("static inline void " & htType & "_set(" & htType & "* s, " & keyType & " key, " & valType & " val) {\n")
+  s.add("static void " & htType & "_set(" & htType & "* s, " & keyType & " key, " & valType & " val) {\n")
   s.add("  if(s->len*4>=s->cap*3) " & htType & "_grow(s);\n")  # 75% load factor
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) s->len++;\n")
   s.add("  s->used[i]=true; s->keys[i]=key; s->vals[i]=val;\n}\n")
   # get (returns value, undefined if missing)
-  s.add("static inline " & valType & " " & htType & "_get(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static " & valType & " " & htType & "_get(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  return s->vals[i];\n}\n")
   # has
-  s.add("static inline bool " & htType & "_has(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static bool " & htType & "_has(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  return s->used[i];\n}\n")
   # remove
-  s.add("static inline void " & htType & "_remove(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static void " & htType & "_remove(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return;\n")
   s.add("  s->used[i]=false; s->len--;\n")
@@ -578,7 +578,7 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n}\n")
   # removeIf (returns bool)
-  s.add("static inline bool " & htType & "_removeIf(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static bool " & htType & "_removeIf(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return false;\n")
   s.add("  s->used[i]=false; s->len--;\n")
@@ -590,7 +590,7 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("  return true;\n}\n")
   # free
   if g.needsFree(keyType) or g.needsFree(valType):
-    s.add("static inline void " & htType & "_free(" & htType & "* s) {\n")
+    s.add("static void " & htType & "_free(" & htType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
     s.add("    if (s->used[i]) {\n")
     if g.needsFree(keyType):
@@ -600,7 +600,7 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
     s.add("    }\n  }\n")
     s.add("  free(s->used); free(s->keys); free(s->vals);\n}\n\n")
   else:
-    s.add("static inline void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
+    s.add("static void " & htType & "_free(" & htType & "* s) { free(s->used); free(s->keys); free(s->vals); }\n\n")
   g.pendingSpecializations.add(s)
 
 proc ensureHashSetType(g: var CodeGen, elemType: string) =
@@ -616,29 +616,29 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
                else: eqFn & "(s->keys[i], key)"
   var s = ""
   s.add("typedef struct { bool* used; " & elemType & "* keys; size_t cap; size_t len; } " & hsType & ";\n")
-  s.add("static inline " & hsType & " " & hsType & "_new(size_t cap) {\n")
+  s.add("static " & hsType & " " & hsType & "_new(size_t cap) {\n")
   s.add("  if(cap<8) cap=8;\n")
   s.add("  return (" & hsType & "){(bool*)calloc(cap,sizeof(bool)),(" & elemType & "*)calloc(cap,sizeof(" & elemType & ")),cap,0};\n}\n")
-  s.add("static inline size_t " & hsType & "_findslot(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static size_t " & hsType & "_findslot(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
   s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
   s.add("  return i;\n}\n")
-  s.add("static inline void " & hsType & "_grow(" & hsType & "* s) {\n")
+  s.add("static void " & hsType & "_grow(" & hsType & "* s) {\n")
   s.add("  size_t oldcap=s->cap; bool* ou=s->used; " & elemType & "* ok=s->keys;\n")
   s.add("  s->cap*=2; s->len=0;\n")
   s.add("  s->used=(bool*)calloc(s->cap,sizeof(bool));\n")
   s.add("  s->keys=(" & elemType & "*)calloc(s->cap,sizeof(" & elemType & "));\n")
   s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & hsType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->len++; }\n")
   s.add("  free(ou); free(ok);\n}\n")
-  s.add("static inline void " & hsType & "_add(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static void " & hsType & "_add(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  if(s->len*4>=s->cap*3) " & hsType & "_grow(s);\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) s->len++;\n")
   s.add("  s->used[i]=true; s->keys[i]=key;\n}\n")
-  s.add("static inline bool " & hsType & "_has(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static bool " & hsType & "_has(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  return s->used[i];\n}\n")
-  s.add("static inline void " & hsType & "_remove(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static void " & hsType & "_remove(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return;\n")
   s.add("  s->used[i]=false; s->len--;\n")
@@ -650,7 +650,7 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n}\n")
   # removeIf (returns bool)
-  s.add("static inline bool " & hsType & "_removeIf(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static bool " & hsType & "_removeIf(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return false;\n")
   s.add("  s->used[i]=false; s->len--;\n")
@@ -661,13 +661,13 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n")
   s.add("  return true;\n}\n")
   if g.needsFree(elemType):
-    s.add("static inline void " & hsType & "_free(" & hsType & "* s) {\n")
+    s.add("static void " & hsType & "_free(" & hsType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
     s.add("    if (s->used[i]) " & g.freeExprStr("s->keys[i]", elemType) & "\n")
     s.add("  }\n")
     s.add("  free(s->used); free(s->keys);\n}\n\n")
   else:
-    s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
+    s.add("static void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
   g.pendingSpecializations.add(s)
 
 proc ensureHeapType(g: var CodeGen, innerType: string) =
@@ -676,11 +676,11 @@ proc ensureHeapType(g: var CodeGen, innerType: string) =
   g.emittedSpecializations.add(heapType)
   var s = ""
   s.add("typedef " & innerType & "* " & heapType & ";\n")
-  s.add("static inline " & heapType & " " & heapType & "_alloc(" & innerType & " val) {\n")
+  s.add("static " & heapType & " " & heapType & "_alloc(" & innerType & " val) {\n")
   s.add("  " & innerType & "* p = (" & innerType & "*)malloc(sizeof(" & innerType & "));\n")
   s.add("  *p = val;\n  return p;\n}\n")
   if g.needsFree(innerType):
-    s.add("static inline void " & heapType & "_free(" & heapType & " p) {\n")
+    s.add("static void " & heapType & "_free(" & heapType & " p) {\n")
     if innerType in g.typeFields:
       s.add("  " & innerType & "_free(p);\n")
     elif innerType == "iris_String":
@@ -702,37 +702,37 @@ proc ensureSeqType(g: var CodeGen, elemType: string) =
   var s = ""
   s.add("typedef struct { " & elemType & "* data; size_t len; size_t cap; } " & seqType & ";\n")
   # from N elements
-  s.add("static inline " & seqType & " " & seqType & "_from(" & elemType & "* arr, size_t n) {\n")
+  s.add("static " & seqType & " " & seqType & "_from(" & elemType & "* arr, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
   s.add("  for (size_t i = 0; i < n; i++) data[i] = arr[i];\n")
   s.add("  return (" & seqType & "){data, n, n};\n}\n")
   # fill
-  s.add("static inline " & seqType & " " & seqType & "_fill(" & elemType & " val, size_t n) {\n")
+  s.add("static " & seqType & " " & seqType & "_fill(" & elemType & " val, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
   s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
   s.add("  return (" & seqType & "){data, n, n};\n}\n")
   # with capacity
-  s.add("static inline " & seqType & " " & seqType & "_with_cap(size_t cap) {\n")
+  s.add("static " & seqType & " " & seqType & "_with_cap(size_t cap) {\n")
   s.add("  return (" & seqType & "){(" & elemType & "*)malloc(cap * sizeof(" & elemType & ")), 0, cap};\n}\n")
   # add
-  s.add("static inline void " & seqType & "_add(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static void " & seqType & "_add(" & seqType & "* s, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
   s.add("  }\n  s->data[s->len++] = val;\n}\n")
   # remove (remove at index, preserve order, O(n))
-  s.add("static inline void " & seqType & "_remove(" & seqType & "* s, size_t i) {\n")
+  s.add("static void " & seqType & "_remove(" & seqType & "* s, size_t i) {\n")
   s.add("  for (size_t j = i; j < s->len - 1; j++) s->data[j] = s->data[j + 1];\n")
   s.add("  s->len--;\n}\n")
   # removeSwap (remove at index, swap with last, O(1))
-  s.add("static inline void " & seqType & "_removeSwap(" & seqType & "* s, size_t i) {\n")
+  s.add("static void " & seqType & "_removeSwap(" & seqType & "* s, size_t i) {\n")
   s.add("  s->data[i] = s->data[s->len - 1];\n")
   s.add("  s->len--;\n}\n")
   # pop (remove and return last)
-  s.add("static inline " & elemType & " " & seqType & "_pop(" & seqType & "* s) {\n")
+  s.add("static " & elemType & " " & seqType & "_pop(" & seqType & "* s) {\n")
   s.add("  return s->data[--s->len];\n}\n")
   # insert (insert at index, shift right, O(n))
-  s.add("static inline void " & seqType & "_insert(" & seqType & "* s, size_t i, " & elemType & " val) {\n")
+  s.add("static void " & seqType & "_insert(" & seqType & "* s, size_t i, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
@@ -740,20 +740,20 @@ proc ensureSeqType(g: var CodeGen, elemType: string) =
   s.add("  for (size_t j = s->len; j > i; j--) s->data[j] = s->data[j - 1];\n")
   s.add("  s->data[i] = val;\n  s->len++;\n}\n")
   # contains (returns bool)
-  s.add("static inline bool " & seqType & "_contains(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static bool " & seqType & "_contains(" & seqType & "* s, " & elemType & " val) {\n")
   s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return true;\n")
   s.add("  return false;\n}\n")
   # find (returns index, -1 if not found)
-  s.add("static inline int64_t " & seqType & "_find(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static int64_t " & seqType & "_find(" & seqType & "* s, " & elemType & " val) {\n")
   s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
   s.add("  return -1;\n}\n")
   # free
   if g.needsFree(elemType):
-    s.add("static inline void " & seqType & "_free(" & seqType & "* s) {\n")
+    s.add("static void " & seqType & "_free(" & seqType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->len; i++) " & g.freeExprStr("s->data[i]", elemType) & "\n")
     s.add("  free(s->data); s->data = NULL; s->len = 0; s->cap = 0;\n}\n\n")
   else:
-    s.add("static inline void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
+    s.add("static void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
   g.pendingSpecializations.add(s)
 
 # ── Expression codegen ──
@@ -1457,7 +1457,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let params = if paramStrs.len > 0: paramStrs.join(", ") else: "void"
     # Generate function into pendingSpecializations
     var fn = ""
-    fn.add("static inline " & ret & " " & name & "(" & params & ") {\n")
+    fn.add("static " & ret & " " & name & "(" & params & ") {\n")
     if ret != "void":
       fn.add("  return ")
     else:
@@ -2317,7 +2317,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
       typesNeedingFree.add(name)
   # Forward declarations
   for name in typesNeedingFree:
-    g.emit("static inline void " & name & "_free(" & name & "* self);\n")
+    g.emit("static void " & name & "_free(" & name & "* self);\n")
   if typesNeedingFree.len > 0: g.emit("\n")
   # Bodies
   for name in typesNeedingFree:
@@ -2377,7 +2377,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
           for et in f.errorTypes:
             if g.needsFree(g.typeToCStr(et)): hasHeap = true
           if hasHeap:
-            var s = "static inline void " & resultName & "_free(" & resultName & "* self) {\n"
+            var s = "static void " & resultName & "_free(" & resultName & "* self) {\n"
             s.add("  switch (self->kind) {\n")
             s.add("    case " & resultName & "_Ok:\n")
             if g.needsFree(valType):
@@ -2462,7 +2462,7 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
     if name.len > 0 and name in g.typeFields and g.needsFree(name):
       modTypesNeedingFree.add(name)
   for name in modTypesNeedingFree:
-    g.emit("static inline void " & name & "_free(" & name & "* self);\n")
+    g.emit("static void " & name & "_free(" & name & "* self);\n")
   if modTypesNeedingFree.len > 0: g.emit("\n")
   for name in modTypesNeedingFree:
     g.emitStructFree(name)
