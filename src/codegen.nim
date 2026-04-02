@@ -157,7 +157,7 @@ proc needsFree(g: CodeGen, ct: string): bool =
 proc freeExprStr(g: CodeGen, expr: string, ct: string): string =
   ## Return a C statement that frees expr of type ct
   if ct == "iris_String":
-    return "free(" & expr & ".data);"
+    return "iris_String_free(&" & expr & ");"
   elif ct.isSeqType():
     return ct & "_free(&" & expr & ");"
   elif ct.isHashTableType():
@@ -1160,8 +1160,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
           let ret = if specReturn != nil: g.typeToCStr(specReturn) else: "void"
           g.emit(ret & " " & specName & "(" & g.formatParams(specParams) & ") {\n")
           g.indent = 1
+          g.pushScope()
           if specReturn != nil: g.emitLine(ret & " iris_result;")
           for st in gf.body: g.genStmt(st)
+          g.emitScopeCleanup()
+          g.popScope()
           if specReturn != nil: g.emitLine("return iris_result;")
           g.indent = 0
           g.emit("}\n\n")
@@ -1865,17 +1868,25 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
   elif s of IfStmt:
     let ifs = IfStmt(s)
     for i, b in ifs.branches:
-      g.emitIndent()
-      g.emit(if i == 0: "if (" else: "else if (")
+      if i == 0:
+        g.emitIndent(); g.emit("if (")
+      else:
+        g.emit(" else if (")
       g.genCondExpr(b.cond); g.emit(") {\n")
       g.indent += 1
+      g.pushScope()
       for st in b.body: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
       g.indent -= 1
-      g.emitIndent(); g.emit("} ")
+      g.emitIndent(); g.emit("}")
     if ifs.elseBranch.len > 0:
-      g.emit("else {\n")
+      g.emit(" else {\n")
       g.indent += 1
+      g.pushScope()
       for st in ifs.elseBranch: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
       g.indent -= 1
       g.emitIndent(); g.emit("}")
     g.emit("\n")
@@ -1885,7 +1896,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if w.label.len > 0: g.emitLine(w.label & "_start:")
     g.emitIndent(); g.emit("while ("); g.genCondExpr(w.condition); g.emit(") {\n")
     g.indent += 1
+    g.pushScope()
     for st in w.body: g.genStmt(st)
+    g.emitScopeCleanup()
+    g.popScope()
     g.indent -= 1
     g.emitLine("}")
     if w.label.len > 0: g.emitLine(w.label & "_end: ;")
@@ -1893,6 +1907,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
   elif s of ForStmt:
     let f = ForStmt(s)
     if f.label.len > 0: g.emitLine(f.label & "_start:")
+    # Emit loop header (varies by iterator type)
+    var preBody = ""  # extra line inside loop before user body (e.g., elem = data[i])
     if f.iter of RangeExpr:
       let r = RangeExpr(f.iter)
       g.emitIndent(); g.emit("for (int64_t " & f.varName & " = ")
@@ -1901,10 +1917,6 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.genExpr(r.finish)
       g.emit("; " & f.varName & "++) {\n")
       g.varTypes[f.varName] = "int64_t"
-      g.indent += 1
-      for st in f.body: g.genStmt(st)
-      g.indent -= 1
-      g.emitLine("}")
     elif f.iter of IdentExpr:
       let iterName = IdentExpr(f.iter).name
       let iterType = g.varCType(iterName)
@@ -1914,34 +1926,27 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         g.varTypes[f.varName] = elemT
         g.emitIndent()
         g.emit("for (size_t " & idx & " = 0; " & idx & " < " & iterName & ".len; " & idx & "++) {\n")
-        g.indent += 1
-        g.emitLine(elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];")
-        for st in f.body: g.genStmt(st)
-        g.indent -= 1
-        g.emitLine("}")
+        preBody = elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];"
       elif iterType.isArrayType():
         let elemT = arrayElemType(iterType)
         let size = arraySize(iterType)
         g.varTypes[f.varName] = elemT
         g.emitIndent()
         g.emit("for (size_t " & idx & " = 0; " & idx & " < " & size & "; " & idx & "++) {\n")
-        g.indent += 1
-        g.emitLine(elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];")
-        for st in f.body: g.genStmt(st)
-        g.indent -= 1
-        g.emitLine("}")
+        preBody = elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];"
       else:
         g.emitIndent(); g.emit("/* for " & f.varName & " in <collection> */ {\n")
-        g.indent += 1
-        for st in f.body: g.genStmt(st)
-        g.indent -= 1
-        g.emitLine("}")
     else:
       g.emitIndent(); g.emit("/* for " & f.varName & " in <collection> */ {\n")
-      g.indent += 1
-      for st in f.body: g.genStmt(st)
-      g.indent -= 1
-      g.emitLine("}")
+    # Emit body with scope cleanup (same for all iterator types)
+    g.indent += 1
+    g.pushScope()
+    if preBody.len > 0: g.emitLine(preBody)
+    for st in f.body: g.genStmt(st)
+    g.emitScopeCleanup()
+    g.popScope()
+    g.indent -= 1
+    g.emitLine("}")
     if f.label.len > 0: g.emitLine(f.label & "_end: ;")
 
   elif s of BreakStmt:
@@ -2157,26 +2162,33 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if optionType:
       var first = true
       for b in cs.branches:
-        g.emitIndent()
+        if first:
+          g.emitIndent()
         if b.pattern.kind == patSome:
-          g.emit((if first: "if (" else: "else if ("))
+          g.emit((if first: "if (" else: " else if ("))
           g.genExpr(cs.expr); g.emit(".has) {\n")
         elif b.pattern.kind == patNone:
           if first:
             g.emit("if (!"); g.genExpr(cs.expr); g.emit(".has) {\n")
           else:
-            g.emit("else {\n")
+            g.emit(" else {\n")
         else:
           g.emit("/* unknown option pattern */ {\n")
         first = false
         g.indent += 1
+        g.pushScope()
         for st in b.body: g.genStmt(st)
+        g.emitScopeCleanup()
+        g.popScope()
         g.indent -= 1
-        g.emitIndent(); g.emit("} ")
+        g.emitIndent(); g.emit("}")
       if cs.elseBranch.len > 0:
-        g.emit("else {\n")
+        g.emit(" else {\n")
         g.indent += 1
+        g.pushScope()
         for st in cs.elseBranch: g.genStmt(st)
+        g.emitScopeCleanup()
+        g.popScope()
         g.indent -= 1
         g.emitIndent(); g.emit("}")
       g.emit("\n")
@@ -2210,6 +2222,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       of patNone:
         g.emitLine("/* of none — not yet implemented */")
       g.indent += 1
+      g.pushScope()
       # Set active variant for field access checks inside this branch
       if variantVar.len > 0 and b.pattern.kind == patVariant:
         g.activeCaseBranch[variantVar] = @[b.pattern.name]
@@ -2217,12 +2230,17 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       # Clear active variant after branch
       if variantVar.len > 0:
         g.activeCaseBranch.del(variantVar)
+      g.emitScopeCleanup()
+      g.popScope()
       g.emitLine("break;")
       g.indent -= 1
     if cs.elseBranch.len > 0:
       g.emitLine("default:")
       g.indent += 1
+      g.pushScope()
       for st in cs.elseBranch: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
       g.emitLine("break;")
       g.indent -= 1
     else:
@@ -2233,6 +2251,16 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of QuitStmt:
     let q = QuitStmt(s)
+    # Clean up all scope vars before exit
+    for si in countdown(g.scopeVars.len - 1, 0):
+      for vi in countdown(g.scopeVars[si].len - 1, 0):
+        let name = g.scopeVars[si][vi]
+        if name in g.movedVars: continue
+        let ct = g.varCType(name)
+        if g.needsFree(ct):
+          let stmt = g.freeExprStr(name, ct)
+          if stmt.len > 0:
+            g.emitLine(stmt)
     g.emitIndent()
     if q.expr != nil:
       g.emit("exit("); g.genExpr(q.expr); g.emit(");\n")
@@ -2241,7 +2269,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
 
   elif s of DiscardStmt:
-    g.emitLine("(void)0;")
+    discard  # no-op, nothing to emit
 
   else:
     g.emitLine("/* not yet implemented */")
@@ -2337,6 +2365,33 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
             let etype = g.typeToCStr(et)
             g.emit(etype & " " & etype & "_err; ")
           g.emit("}; } " & resultName & ";\n")
+          # Register Result as struct in typeFields
+          var resultFields: seq[tuple[name, ctype: string]]
+          resultFields.add(("value", valType))
+          for et in f.errorTypes:
+            let etype = g.typeToCStr(et)
+            resultFields.add((etype & "_err", etype))
+          g.typeFields[resultName] = resultFields
+          # Generate _free if any variant contains heap data
+          var hasHeap = g.needsFree(valType)
+          for et in f.errorTypes:
+            if g.needsFree(g.typeToCStr(et)): hasHeap = true
+          if hasHeap:
+            var s = "static inline void " & resultName & "_free(" & resultName & "* self) {\n"
+            s.add("  switch (self->kind) {\n")
+            s.add("    case " & resultName & "_Ok:\n")
+            if g.needsFree(valType):
+              s.add("      " & g.freeExprStr("self->value", valType) & "\n")
+            s.add("      break;\n")
+            for et in f.errorTypes:
+              let etype = g.typeToCStr(et)
+              if g.needsFree(etype):
+                s.add("    case " & resultName & "_" & etype & ":\n")
+                s.add("      " & etype & "_free(&self->" & etype & "_err);\n")
+                s.add("      break;\n")
+            s.add("    default: break;\n")
+            s.add("  }\n}\n")
+            g.emit(s)
         g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
         g.fnReturnTypes[f.name] = resultName
         g.fnParamTypes[f.name] = f.params.mapIt(g.typeToCStr(it.typeAnn))
@@ -2433,8 +2488,11 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
       if not f.public: g.emit("static ")
       g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
+      g.pushScope()
       if hasReturn: g.emitLine(ret & " iris_result;")
       for st in f.body: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
       if hasReturn: g.emitLine("return iris_result;")
       g.indent -= 1
       g.emit("}\n\n")

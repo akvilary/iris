@@ -446,53 +446,69 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
 
     if ifS.elseBranch.len > 0:
       # if/elif/else — variable is initialized only if initialized in ALL branches
+      # Move is confirmed only if moved in ALL branches
       let initBefore = ctx.initVars
+      let movedBefore = ctx.movedVars
 
       var branchInits: seq[HashSet[string]]
+      var branchMoves: seq[HashSet[string]]
       for branch in ifS.branches:
         ctx.initVars = initBefore
+        ctx.movedVars = movedBefore
         ctx.pushScope()
         ctx.analyzeBody(branch.body)
         ctx.popScope()
         branchInits.add(ctx.initVars)
+        branchMoves.add(ctx.movedVars)
 
       # else branch
       ctx.initVars = initBefore
+      ctx.movedVars = movedBefore
       ctx.pushScope()
       ctx.analyzeBody(ifS.elseBranch)
       ctx.popScope()
       branchInits.add(ctx.initVars)
+      branchMoves.add(ctx.movedVars)
 
-      # Intersection: only vars initialized in ALL branches
-      var merged = branchInits[0]
+      # Intersection: only vars initialized/moved in ALL branches
+      var mergedInit = branchInits[0]
+      var mergedMoved = branchMoves[0]
       for i in 1..<branchInits.len:
-        merged = merged * branchInits[i]  # set intersection
-      ctx.initVars = merged
+        mergedInit = mergedInit * branchInits[i]
+        mergedMoved = mergedMoved * branchMoves[i]
+      ctx.initVars = mergedInit
+      ctx.movedVars = mergedMoved
     else:
-      # No else — can't guarantee any new initializations
+      # No else — can't guarantee any new initializations or moves
       let initBefore = ctx.initVars
+      let movedBefore = ctx.movedVars
       for branch in ifS.branches:
         ctx.initVars = initBefore
+        ctx.movedVars = movedBefore
         ctx.pushScope()
         ctx.analyzeBody(branch.body)
         ctx.popScope()
       ctx.initVars = initBefore
+      ctx.movedVars = movedBefore
 
   elif s of WhileStmt:
     let w = WhileStmt(s)
     ctx.analyzeExpr(w.condition)
-    # Loop body may not execute — don't count new inits
+    # Loop body may not execute — don't count new inits or moves
     let initBefore = ctx.initVars
+    let movedBefore = ctx.movedVars
     ctx.pushScope()
     ctx.analyzeBody(w.body)
     ctx.popScope()
     ctx.initVars = initBefore
+    ctx.movedVars = movedBefore
 
   elif s of ForStmt:
     let f = ForStmt(s)
     ctx.analyzeExpr(f.iter)
-    # Loop body may not execute
+    # Loop body may not execute — don't count new inits or moves
     let initBefore = ctx.initVars
+    let movedBefore = ctx.movedVars
     ctx.pushScope()
     ctx.declareVar(f.varName, VarInfo(name: f.varName, modifier: declDefault))
     ctx.markInitialized(f.varName)
@@ -500,10 +516,12 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.popScope()
     if f.elseBranch.len > 0:
       ctx.initVars = initBefore
+      ctx.movedVars = movedBefore
       ctx.pushScope()
       ctx.analyzeBody(f.elseBranch)
       ctx.popScope()
     ctx.initVars = initBefore
+    ctx.movedVars = movedBefore
 
   elif s of BlockStmt:
     ctx.pushScope()

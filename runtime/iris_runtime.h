@@ -29,6 +29,10 @@ typedef iris_view_String iris_str;
 
 typedef struct { char* data; size_t len; size_t cap; } iris_String;
 
+static inline void iris_String_free(iris_String* s) {
+  free(s->data); s->data = NULL; s->len = 0; s->cap = 0;
+}
+
 static inline iris_String iris_String_from(const char* s) {
   size_t len = strlen(s);
   char* data = (char*)malloc(len + 1);
