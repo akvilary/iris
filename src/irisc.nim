@@ -194,7 +194,9 @@ proc buildBinary(source, inputPath: string): string =
 
   # Compile all C files together
   let binPath = inputPath.changeFileExt("")
-  let ccCmd = "cc " & cFiles.join(" ") & " -o " & binPath
+  let compilerDir = getAppDir()
+  let runtimeDir = compilerDir / "runtime"
+  let ccCmd = "cc " & cFiles.join(" ") & " -I" & runtimeDir & " -o " & binPath
   let (output, exitCode) = execCmdEx(ccCmd)
 
   # Cleanup C files
