@@ -1503,7 +1503,32 @@ proc genCondExpr(g: var CodeGen, e: Expr) =
         g.emit("!"); g.genExpr(inner); g.emit(".has"); return
       if ct.endsWith("_Result"):
         g.emit("("); g.genExpr(inner); g.emit(".kind != "); g.emit(ct & "_Ok)"); return
-  g.genExpr(e)
+  # Binary expressions already emit their own parens — unwrap to avoid ((x > 5))
+  if e of BinaryExpr:
+    let b = BinaryExpr(e)
+    g.genExpr(b.left)
+    let opStr = case b.op
+      of opAdd: " + "
+      of opSub: " - "
+      of opMul: " * "
+      of opDiv: " / "
+      of opMod: " % "
+      of opEq: " == "
+      of opNotEq: " != "
+      of opLess: " < "
+      of opLessEq: " <= "
+      of opGreater: " > "
+      of opGreaterEq: " >= "
+      of opAnd: " && "
+      of opOr: " || "
+      of opPipe: " | "
+      of opShl: " << "
+      of opShr: " >> "
+      of opXor: " ^ "
+    g.emit(opStr)
+    g.genExpr(b.right)
+  else:
+    g.genExpr(e)
 
 # ── Statement codegen ──
 
@@ -1669,13 +1694,19 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
                 g.genDestructPattern(grandchild, innerTmp, innerType, j)
       g.genDirectAssign(dd.pattern, tup)
     else:
-      # Path B: RHS is a call/variable — evaluate into temp, access fields
-      let tmpName = g.nextTmp()
+      # Path B: RHS is a call/variable — access fields directly or via temp
       let tmpType = g.inferCType(dd.value)
-      g.emitIndent()
-      g.emit("const " & tmpType & " " & tmpName & " = ")
-      g.genExpr(dd.value)
-      g.emit(";\n")
+      var tmpName: string
+      if dd.value of IdentExpr:
+        # Simple variable — access fields directly, no copy needed
+        tmpName = IdentExpr(dd.value).name
+      else:
+        # Complex expression — evaluate into temp first
+        tmpName = g.nextTmp()
+        g.emitIndent()
+        g.emit("const " & tmpType & " " & tmpName & " = ")
+        g.genExpr(dd.value)
+        g.emit(";\n")
       for i, child in dd.pattern.children:
         g.genDestructPattern(child, tmpName, tmpType, i)
 
@@ -2131,8 +2162,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           g.emit((if first: "if (" else: "else if ("))
           g.genExpr(cs.expr); g.emit(".has) {\n")
         elif b.pattern.kind == patNone:
-          g.emit((if first: "if (!" else: "else if (!"))
-          g.genExpr(cs.expr); g.emit(".has) {\n")
+          if first:
+            g.emit("if (!"); g.genExpr(cs.expr); g.emit(".has) {\n")
+          else:
+            g.emit("else {\n")
         else:
           g.emit("/* unknown option pattern */ {\n")
         first = false
