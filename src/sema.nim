@@ -30,6 +30,7 @@ type
     movedVars: HashSet[string] # variables moved via result = x
     fnParamMods: Table[string, seq[ParamModifier]]  # func name -> param modifiers
     currentFnReturnsBorrow: bool  # true if current function returns view/str
+    currentFnReturnType: TypeExpr  # current function's return type
     currentFnBorrowParams: HashSet[string]  # borrow param names in current function
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
@@ -116,6 +117,21 @@ proc isHeapExpr(e: Expr): bool =
   if e of HashSetLitExpr: return true  # ~{v}
   if e of HeapAllocExpr: return true  # ~Type(...)
   return false
+
+proc inferType(ctx: SemaContext, e: Expr): TypeExpr =
+  ## Infer type from expression
+  if e == nil: return nil
+  if e of IntLitExpr: return NamedType(name: "int")
+  if e of FloatLitExpr: return NamedType(name: "float")
+  if e of BoolLitExpr: return NamedType(name: "bool")
+  if e of RuneLitExpr: return NamedType(name: "rune")
+  if e of StringLitExpr: return NamedType(name: "str")
+  if e of StringInterpExpr: return GenericType(name: "view", args: @[TypeExpr(NamedType(name: "String"))])
+  if e of StrLitExpr or e of StrInterpExpr: return NamedType(name: "String")
+  if e of IdentExpr:
+    let info = ctx.lookupVarInfo(IdentExpr(e).name)
+    return info.typeAnn
+  return nil
 
 proc isBorrowType(t: TypeExpr): bool =
   ## Check if return type is a borrow (view[T] or str)
@@ -305,8 +321,12 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       if srcInfo.isHeap:
         heap = true
         ctx.movedVars.incl(srcName)
+    # Infer type if not explicitly annotated
+    let resolvedType = if d.typeAnn != nil: d.typeAnn
+                       elif d.value != nil: ctx.inferType(d.value)
+                       else: nil
     # Declare the variable
-    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: d.typeAnn, isHeap: heap))
+    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: resolvedType, isHeap: heap))
     # Mark initialized if it has a value
     if d.value != nil:
       ctx.markInitialized(d.name)
@@ -344,12 +364,19 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
   elif s of ResultAssignStmt:
     let rs = ResultAssignStmt(s)
     ctx.analyzeExpr(rs.value)
-    # Lifetime check: if function returns borrow, result must come from a param
+    # Type check: owned type cannot be returned as view/str
     if ctx.currentFnReturnsBorrow and rs.value of IdentExpr:
       let srcName = IdentExpr(rs.value).name
-      if srcName notin ctx.currentFnBorrowParams and srcName != "result":
-        ctx.error("error: cannot return borrow of local variable '" & srcName &
-          "' — it will be freed when function exits")
+      if srcName != "result":
+        let srcInfo = ctx.lookupVarInfo(srcName)
+        if srcInfo.isHeap:
+          if isHeapTypeAnn(srcInfo.typeAnn):
+            ctx.error("error: type mismatch — expected " &
+              typeToStr(ctx.currentFnReturnType) & ", got " &
+              typeToStr(srcInfo.typeAnn))
+          else:
+            ctx.error("error: cannot return '" & srcName &
+              "' — it is a view of local data that will be freed")
     # Mark variable as moved (ownership transfer)
     if rs.value of IdentExpr:
       ctx.movedVars.incl(IdentExpr(rs.value).name)
@@ -366,10 +393,12 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     let savedParams = ctx.fnParams
     let savedMoved = ctx.movedVars
     let savedReturnsBorrow = ctx.currentFnReturnsBorrow
+    let savedReturnType = ctx.currentFnReturnType
     let savedBorrowParams = ctx.currentFnBorrowParams
     ctx.fnParams = initHashSet[string]()
     ctx.movedVars = initHashSet[string]()
     ctx.currentFnReturnsBorrow = isBorrowType(f.returnType)
+    ctx.currentFnReturnType = f.returnType
     ctx.currentFnBorrowParams = initHashSet[string]()
     for p in f.params:
       # str cannot be passed as mut — it references read-only data (.rodata)
@@ -388,6 +417,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.fnParams = savedParams
     ctx.movedVars = savedMoved
     ctx.currentFnReturnsBorrow = savedReturnsBorrow
+    ctx.currentFnReturnType = savedReturnType
     ctx.currentFnBorrowParams = savedBorrowParams
     ctx.popScope()
 

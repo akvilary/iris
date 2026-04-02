@@ -21,7 +21,7 @@
 @Color! enum:
   @Red, @Green, @Blue
 
-@c = Color.red
+@c = Color.Red
 @name = case c of Red "Red" of Green "Green" of Blue "Blue"
 *echo(name)
 

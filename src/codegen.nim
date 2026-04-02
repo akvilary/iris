@@ -144,7 +144,7 @@ proc htValType(ct: string): string =
 proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
 
 proc isHeapType(ct: string): bool =
-  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType()
+  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_")
 
 proc needsRefParam(ct: string): bool =
   ## Types that should be passed by pointer for mut params
@@ -176,6 +176,8 @@ proc emitScopeCleanup(g: var CodeGen) =
       g.emitLine(ct & "_free(&" & name & ");")
     elif ct.isHashSetType():
       g.emitLine(ct & "_free(&" & name & ");")
+    elif ct.startsWith("iris_Heap_"):
+      g.emitLine("free(" & name & ");")
 
 proc popScope(g: var CodeGen) =
   if g.scopeVars.len > 0:
@@ -287,8 +289,9 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
     if fa.expr of IdentExpr:
       let objName = IdentExpr(fa.expr).name
       let objType = g.varCType(objName)
-      if objType.len > 0 and objType in g.typeFields:
-        for f in g.typeFields[objType]:
+      let lookupType = if objType.startsWith("iris_Heap_"): objType[10..^1] else: objType
+      if lookupType.len > 0 and lookupType in g.typeFields:
+        for f in g.typeFields[lookupType]:
           if f.name == fa.field:
             case f.ctype
             of "double", "float": return ("%g", false)
@@ -386,8 +389,9 @@ proc inferCType(g: CodeGen, e: Expr): string =
       if fa.field == "cap" and (varType.isArrayType() or varType.isSeqType()):
         return "int64_t"
       if name in g.enumNames: return name
-      if varType.len > 0 and varType in g.typeFields:
-        for f in g.typeFields[varType]:
+      let lookupType = if varType.startsWith("iris_Heap_"): varType[10..^1] else: varType
+      if lookupType.len > 0 and lookupType in g.typeFields:
+        for f in g.typeFields[lookupType]:
           if f.name == fa.field:
             return f.ctype
   if e of IndexExpr:
@@ -581,6 +585,17 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("static inline void " & hsType & "_free(" & hsType & "* s) { free(s->used); free(s->keys); }\n\n")
   g.pendingSpecializations.add(s)
 
+proc ensureHeapType(g: var CodeGen, innerType: string) =
+  let heapType = "iris_Heap_" & innerType
+  if heapType in g.emittedSpecializations: return
+  g.emittedSpecializations.add(heapType)
+  var s = ""
+  s.add("typedef " & innerType & "* " & heapType & ";\n")
+  s.add("static inline " & heapType & " " & heapType & "_alloc(" & innerType & " val) {\n")
+  s.add("  " & innerType & "* p = (" & innerType & "*)malloc(sizeof(" & innerType & "));\n")
+  s.add("  *p = val;\n  return p;\n}\n\n")
+  g.pendingSpecializations.add(s)
+
 proc ensureSeqType(g: var CodeGen, elemType: string) =
   let seqType = "iris_Seq_" & elemType
   if seqType in g.emittedSeqTypes: return
@@ -710,6 +725,22 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
       g.emit("{ " & ct & " __echo_tmp = ")
       g.genExpr(e)
       g.emit("; printf(\"%.*s\\n\", (int)__echo_tmp.len, __echo_tmp.data); }")
+    elif ct.isSeqType() and e of IdentExpr:
+      let name = IdentExpr(e).name
+      let elemType = seqElemType(ct)
+      g.emit("{ printf(\"[\"); ")
+      g.emit("for (int64_t __i = 0; __i < " & name & ".len; __i++) { ")
+      g.emit("if (__i > 0) printf(\", \"); ")
+      case elemType
+      of "double", "float":
+        g.emit("printf(\"%g\", " & name & ".data[__i]); ")
+      of "bool":
+        g.emit("printf(\"%s\", " & name & ".data[__i] ? \"true\" : \"false\"); ")
+      of "iris_str", "iris_view_String", "iris_String":
+        g.emit("printf(\"%.*s\", (int)" & name & ".data[__i].len, " & name & ".data[__i].data); ")
+      else:
+        g.emit("printf(\"%lld\", (long long)" & name & ".data[__i]); ")
+      g.emit("} printf(\"]\\n\"); }")
     else:
       let (fmt, needsCast) = g.printfFormat(e)
       g.emit("printf(\"" & fmt & "\\n\", ")
@@ -1086,7 +1117,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
         let prefix = g.nameAliases.getOrDefault("__mod_" & name, name)
         g.emit(prefix & "_" & f.field); return
       let varType = g.varCType(name)
-      let acc = if name in g.refVars: "->" else: "."
+      let acc = if name in g.refVars or varType.startsWith("iris_Heap_"): "->" else: "."
       # .len / .cap on array → compile-time constant (cap == len for fixed arrays)
       if (f.field == "len" or f.field == "cap") and varType.isArrayType():
         g.emit(arraySize(varType)); return
@@ -1120,8 +1151,12 @@ proc genExpr(g: var CodeGen, e: Expr) =
               raise newException(ValueError,
                 "error: field '" & f.field & "' is a variant field — access only inside 'case " &
                 name & "." & vi.tagName & ":'")
-    if f.expr of IdentExpr and IdentExpr(f.expr).name in g.refVars:
-      g.emit(IdentExpr(f.expr).name & "->" & f.field)
+    if f.expr of IdentExpr:
+      let fname = IdentExpr(f.expr).name
+      if fname in g.refVars or g.varCType(fname).startsWith("iris_Heap_"):
+        g.emit(fname & "->" & f.field)
+      else:
+        g.emit(fname & "." & f.field)
     else:
       g.genExpr(f.expr); g.emit("."); g.emit(f.field)
   elif e of IndexExpr:
@@ -1246,6 +1281,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let ha = HeapAllocExpr(e)
     let typeName = if ha.inner.fn of IdentExpr: IdentExpr(ha.inner.fn).name
                    else: "Unknown"
+    g.ensureHeapType(typeName)
     g.emit("iris_Heap_" & typeName & "_alloc((" & typeName & "){")
     let fields = g.typeFields.getOrDefault(typeName, @[])
     for i, arg in ha.inner.args:
@@ -1416,7 +1452,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else:
       case d.modifier
       of declDefault, declConst:
-        g.emit("const " & ctype & " " & d.name & " = ")
+        if ctype.isHeapType():
+          g.emit(ctype & " " & d.name & " = ")
+        else:
+          g.emit("const " & ctype & " " & d.name & " = ")
       of declMut:
         g.emit(ctype & " " & d.name & " = ")
       g.genExpr(d.value)

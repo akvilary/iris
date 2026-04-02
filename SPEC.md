@@ -12,6 +12,7 @@ with Rust-level memory safety. "Safe Nim."
 
 ## Syntax
 
+- Case-sensitive language — `Red` and `red` are different identifiers
 - Indentation-based blocks
 - 2 spaces per indent level (enforced by `iris fmt`)
 - No semicolons
