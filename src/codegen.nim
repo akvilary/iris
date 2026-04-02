@@ -1,6 +1,6 @@
 ## C code generator for the Iris language
 
-import std/[strutils, tables, sequtils]
+import std/[strutils, tables, sequtils, sets]
 import ast
 
 type
@@ -41,6 +41,8 @@ type
     movedVars*: seq[string]  # variables moved via result = x or own param
     scopeVars*: seq[seq[string]]  # stack of variable names per scope
     fnOwnParams*: Table[string, seq[int]]  # func name -> indices of own params
+    fnParamMods*: Table[string, seq[ParamModifier]]  # func name -> param modifiers
+    refVars*: HashSet[string]  # variables that are pointers (mut params)
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -144,6 +146,14 @@ proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
 proc isHeapType(ct: string): bool =
   ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType()
 
+proc needsRefParam(ct: string): bool =
+  ## Types that should be passed by pointer for mut params
+  ct.isHeapType() or ct.isArrayType() or ct == "iris_str" or ct == "iris_view_String"
+
+proc addrOf(g: CodeGen, name: string): string =
+  ## Return "&name" for regular vars, "name" for ref vars (already pointer)
+  if name in g.refVars: name else: "&" & name
+
 proc pushScope(g: var CodeGen) =
   g.scopeVars.add(@[])
 
@@ -244,6 +254,12 @@ proc formatParam(g: CodeGen, p: Param): string =
     let ret = if ft.returnType != nil: g.typeToCStr(ft.returnType) else: "void"
     let fparams = ft.paramTypes.mapIt(g.typeToCStr(it)).join(", ")
     ret & "(*" & p.name & ")(" & (if fparams.len > 0: fparams else: "void") & ")"
+  elif p.modifier == paramMut:
+    let ct = g.typeToCStr(p.typeAnn)
+    if needsRefParam(ct):
+      ct & "* " & p.name
+    else:
+      ct & " " & p.name
   else:
     g.typeToCStr(p.typeAnn) & " " & p.name
 
@@ -733,6 +749,8 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     if name in g.nameAliases:
       g.emit(g.nameAliases[name])
+    elif name in g.refVars:
+      g.emit("(*" & name & ")")
     else:
       g.emit(name)
   elif e of BinaryExpr:
@@ -774,31 +792,32 @@ proc genExpr(g: var CodeGen, e: Expr) =
         let varName = IdentExpr(fa.expr).name
         let varType = g.varCType(varName)
         if varType.isSeqType():
+          let addrStr = g.addrOf(varName)
           # .add(x)
           if fa.field == "add" and c.args.len == 1:
-            g.emit(varType & "_add(&" & varName & ", ")
+            g.emit(varType & "_add(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           # .remove(i)
           if fa.field == "remove" and c.args.len == 1:
-            g.emit(varType & "_remove(&" & varName & ", ")
+            g.emit(varType & "_remove(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           # .removeSwap(i)
           if fa.field == "removeSwap" and c.args.len == 1:
-            g.emit(varType & "_removeSwap(&" & varName & ", ")
+            g.emit(varType & "_removeSwap(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           # .pop()
           if fa.field == "pop" and c.args.len == 0:
-            g.emit(varType & "_pop(&" & varName & ")")
+            g.emit(varType & "_pop(" & addrStr & ")")
             return
           # .insert(i, value)
           if fa.field == "insert" and c.args.len == 2:
-            g.emit(varType & "_insert(&" & varName & ", ")
+            g.emit(varType & "_insert(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(", ")
             g.genExpr(c.args[1].value)
@@ -806,59 +825,61 @@ proc genExpr(g: var CodeGen, e: Expr) =
             return
           # .contains(x)
           if fa.field == "contains" and c.args.len == 1:
-            g.emit(varType & "_contains(&" & varName & ", ")
+            g.emit(varType & "_contains(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           # .find(x)
           if fa.field == "find" and c.args.len == 1:
-            g.emit(varType & "_find(&" & varName & ", ")
+            g.emit(varType & "_find(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
         # HashTable methods
         if varType.isHashTableType():
+          let addrStr = g.addrOf(varName)
           if fa.field == "removeIf" and c.args.len == 1:
-            g.emit(varType & "_removeIf(&" & varName & ", ")
+            g.emit(varType & "_removeIf(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           if fa.field == "set" and c.args.len == 2:
-            g.emit(varType & "_set(&" & varName & ", ")
+            g.emit(varType & "_set(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(", ")
             g.genExpr(c.args[1].value)
             g.emit(")")
             return
           if fa.field == "has" and c.args.len == 1:
-            g.emit(varType & "_has(&" & varName & ", ")
+            g.emit(varType & "_has(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           if fa.field == "remove" and c.args.len == 1:
-            g.emit(varType & "_remove(&" & varName & ", ")
+            g.emit(varType & "_remove(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
         # HashSet methods
         if varType.isHashSetType():
+          let addrStr = g.addrOf(varName)
           if fa.field == "removeIf" and c.args.len == 1:
-            g.emit(varType & "_removeIf(&" & varName & ", ")
+            g.emit(varType & "_removeIf(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           if fa.field == "add" and c.args.len == 1:
-            g.emit(varType & "_add(&" & varName & ", ")
+            g.emit(varType & "_add(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           if fa.field == "has" and c.args.len == 1:
-            g.emit(varType & "_has(&" & varName & ", ")
+            g.emit(varType & "_has(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
           if fa.field == "remove" and c.args.len == 1:
-            g.emit(varType & "_remove(&" & varName & ", ")
+            g.emit(varType & "_remove(" & addrStr & ", ")
             g.genExpr(c.args[0].value)
             g.emit(")")
             return
@@ -1033,9 +1054,24 @@ proc genExpr(g: var CodeGen, e: Expr) =
                 "' — expected '" & g.cTypeToIris(paramTypes[i]) &
                 "', got '" & g.cTypeToIris(argType) & "'")
     g.genExpr(c.fn); g.emit("(")
+    # Get param modifiers for this function
+    var mods: seq[ParamModifier]
+    if c.fn of IdentExpr:
+      let fname = IdentExpr(c.fn).name
+      if fname in g.fnParamMods:
+        mods = g.fnParamMods[fname]
     for i, arg in c.args:
       if i > 0: g.emit(", ")
-      g.genExpr(arg.value)
+      # Add & for mut params of ref-passable types
+      if i < mods.len and mods[i] == paramMut and arg.value of IdentExpr:
+        let argName = IdentExpr(arg.value).name
+        let ct = g.varCType(argName)
+        if needsRefParam(ct):
+          g.emit(g.addrOf(argName))
+        else:
+          g.genExpr(arg.value)
+      else:
+        g.genExpr(arg.value)
     g.emit(")")
   elif e of FieldAccessExpr:
     let f = FieldAccessExpr(e)
@@ -1050,18 +1086,19 @@ proc genExpr(g: var CodeGen, e: Expr) =
         let prefix = g.nameAliases.getOrDefault("__mod_" & name, name)
         g.emit(prefix & "_" & f.field); return
       let varType = g.varCType(name)
+      let acc = if name in g.refVars: "->" else: "."
       # .len / .cap on array → compile-time constant (cap == len for fixed arrays)
       if (f.field == "len" or f.field == "cap") and varType.isArrayType():
         g.emit(arraySize(varType)); return
       # .len on Seq → field access
       if f.field == "len" and varType.isSeqType():
-        g.emit("(int64_t)" & name & ".len"); return
+        g.emit("(int64_t)" & name & acc & "len"); return
       # .cap on Seq → field access
       if f.field == "cap" and varType.isSeqType():
-        g.emit("(int64_t)" & name & ".cap"); return
+        g.emit("(int64_t)" & name & acc & "cap"); return
       # .len on HashTable/HashSet
       if f.field == "len" and (varType.isHashTableType() or varType.isHashSetType()):
-        g.emit("(int64_t)" & name & ".len"); return
+        g.emit("(int64_t)" & name & acc & "len"); return
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
       # Check variant field access
@@ -1083,17 +1120,22 @@ proc genExpr(g: var CodeGen, e: Expr) =
               raise newException(ValueError,
                 "error: field '" & f.field & "' is a variant field — access only inside 'case " &
                 name & "." & vi.tagName & ":'")
-    g.genExpr(f.expr); g.emit("."); g.emit(f.field)
+    if f.expr of IdentExpr and IdentExpr(f.expr).name in g.refVars:
+      g.emit(IdentExpr(f.expr).name & "->" & f.field)
+    else:
+      g.genExpr(f.expr); g.emit("."); g.emit(f.field)
   elif e of IndexExpr:
     let idx = IndexExpr(e)
     if idx.expr of IdentExpr:
       let varName = IdentExpr(idx.expr).name
       let varType = g.varCType(varName)
+      let acc = if varName in g.refVars: "->" else: "."
       if varType.isSeqType() or varType.isArrayType():
-        g.genExpr(idx.expr); g.emit(".data["); g.genExpr(idx.index); g.emit("]")
+        g.emit(varName & acc & "data["); g.genExpr(idx.index); g.emit("]")
         return
       if varType.isHashTableType():
-        g.emit(varType & "_get(&" & varName & ", ")
+        let amp = if varName in g.refVars: "" else: "&"
+        g.emit(varType & "_get(" & amp & varName & ", ")
         g.genExpr(idx.index)
         g.emit(")")
         return
@@ -1576,15 +1618,20 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let savedMoved = g.movedVars
       g.movedVars = @[]
       g.pushScope()
-      # Register param types and track own params for auto-free
+      let savedRefs = g.refVars
+      g.refVars = initHashSet[string]()
+      # Register param types, track own/mut params
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
         if p.modifier == paramOwn and ct.isHeapType():
           g.trackVar(p.name)
+        if p.modifier == paramMut and needsRefParam(ct):
+          g.refVars.incl(p.name)
       for st in f.body: g.genStmt(st)
       g.emitScopeCleanup()
       g.popScope()
+      g.refVars = savedRefs
       g.movedVars = savedMoved
       g.inResultFunc = false
       g.emitLine("return __result;")
@@ -1598,15 +1645,20 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let savedMoved = g.movedVars
       g.movedVars = @[]
       g.pushScope()
-      # Register param types and track own params for auto-free
+      let savedRefs = g.refVars
+      g.refVars = initHashSet[string]()
+      # Register param types, track own/mut params
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
         if p.modifier == paramOwn and ct.isHeapType():
           g.trackVar(p.name)
+        if p.modifier == paramMut and needsRefParam(ct):
+          g.refVars.incl(p.name)
       for st in f.body: g.genStmt(st)
       g.emitScopeCleanup()
       g.popScope()
+      g.refVars = savedRefs
       g.movedVars = savedMoved
       if hasReturn: g.emitLine("return __result;")
       g.indent -= 1
@@ -2167,7 +2219,8 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
         g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
         g.fnReturnTypes[f.name] = ret
         g.fnParamTypes[f.name] = f.params.mapIt(g.typeToCStr(it.typeAnn))
-      # Track own param indices
+      # Track param modifiers for call-site codegen
+      g.fnParamMods[f.name] = f.params.mapIt(it.modifier)
       var ownIndices: seq[int]
       for i, p in f.params:
         if p.modifier == paramOwn:

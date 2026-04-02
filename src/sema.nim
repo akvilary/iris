@@ -28,7 +28,7 @@ type
     knownTypes: HashSet[string]
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
     movedVars: HashSet[string] # variables moved via result = x
-    fnOwnParams: Table[string, seq[int]]  # func name -> indices of own params
+    fnParamMods: Table[string, seq[ParamModifier]]  # func name -> param modifiers
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
 
@@ -174,13 +174,26 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     ctx.analyzeExpr(call.fn)
     for arg in call.args:
       ctx.analyzeExpr(arg.value)
-    # Mark arguments passed to own params as moved
+    # Borrow checking and own-move tracking at call site
     if call.fn of IdentExpr:
       let fnName = IdentExpr(call.fn).name
-      if fnName in ctx.fnOwnParams:
-        for idx in ctx.fnOwnParams[fnName]:
-          if idx < call.args.len and call.args[idx].value of IdentExpr:
-            ctx.movedVars.incl(IdentExpr(call.args[idx].value).name)
+      if fnName in ctx.fnParamMods:
+        let mods = ctx.fnParamMods[fnName]
+        # Check mut borrow conflicts: same variable as mut + any other param
+        let argCount = min(mods.len, call.args.len)
+        for i in 0..<argCount:
+          if mods[i] == paramMut and call.args[i].value of IdentExpr:
+            let mutName = IdentExpr(call.args[i].value).name
+            for j in (i+1)..<argCount:
+              if call.args[j].value of IdentExpr and IdentExpr(call.args[j].value).name == mutName:
+                if mods[j] == paramMut:
+                  ctx.error("error: variable '" & mutName & "' passed as mut to multiple parameters")
+                else:
+                  ctx.error("error: variable '" & mutName & "' cannot be passed as both mut and immutable")
+        # Mark own params as moved
+        for i in 0..<min(mods.len, call.args.len):
+          if mods[i] == paramOwn and call.args[i].value of IdentExpr:
+            ctx.movedVars.incl(IdentExpr(call.args[i].value).name)
 
   elif e of FieldAccessExpr:
     ctx.analyzeExpr(FieldAccessExpr(e).expr)
@@ -329,13 +342,8 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # Declare the function name in current scope
     ctx.declareVar(f.name, VarInfo(name: f.name, modifier: declDefault))
     ctx.markInitialized(f.name)
-    # Track which params are own
-    var ownIndices: seq[int]
-    for i, p in f.params:
-      if p.modifier == paramOwn:
-        ownIndices.add(i)
-    if ownIndices.len > 0:
-      ctx.fnOwnParams[f.name] = ownIndices
+    # Track param modifiers for borrow checking at call sites
+    ctx.fnParamMods[f.name] = f.params.mapIt(it.modifier)
     # Analyze body in a new scope with params as initialized
     ctx.pushScope()
     let savedParams = ctx.fnParams
@@ -561,7 +569,7 @@ proc analyze*(stmts: seq[Stmt], filename: string = ""): seq[string] =
     knownTypes: initHashSet[string](),
     fnParams: initHashSet[string](),
     movedVars: initHashSet[string](),
-    fnOwnParams: initTable[string, seq[int]](),
+    fnParamMods: initTable[string, seq[ParamModifier]](),
     filename: filename,
   )
   ctx.pushScope()
