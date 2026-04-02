@@ -35,6 +35,7 @@ type
     concepts*: Table[string, ConceptDeclStmt]  # concept name -> definition
     typeMethods*: Table[string, seq[tuple[name: string, paramTypes: seq[string], retType: string]]]
     emittedSpecializations*: seq[string]  # already emitted specializations
+    emittedSeqTypes*: seq[string]  # already emitted Seq specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
 
@@ -85,6 +86,10 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
     let gt = GenericType(t)
     if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
       "iris_view_" & NamedType(gt.args[0]).name
+    elif gt.name == "Seq" and gt.args.len == 1:
+      "iris_Seq_" & g.typeToCStr(gt.args[0])
+    elif gt.name == "array" and gt.args.len == 2:
+      "__array_" & g.typeToCStr(gt.args[0]) & "_" & g.typeToCStr(gt.args[1])
     else:
       gt.name & "_" & gt.args.mapIt(g.typeToCStr(it)).join("_")
   elif t of TupleType:
@@ -95,8 +100,27 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
 proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
 
+proc isArrayType(ct: string): bool = ct.startsWith("__array_")
+proc isSeqType(ct: string): bool = ct.startsWith("iris_Seq_")
+
+proc arrayElemType(ct: string): string =
+  let rest = ct[8..^1]  # strip "__array_"
+  let i = rest.rfind('_')
+  rest[0..<i]
+
+proc arraySize(ct: string): string =
+  let i = ct.rfind('_')
+  ct[i+1..^1]
+
+proc seqElemType(ct: string): string =
+  ct[9..^1]  # strip "iris_Seq_"
+
 proc cTypeToIris(g: CodeGen, ct: string): string =
   ## Convert C type name back to Iris type name for error messages.
+  if ct.isArrayType():
+    return "array[" & g.cTypeToIris(arrayElemType(ct)) & ", " & arraySize(ct) & "]"
+  if ct.isSeqType():
+    return "Seq[" & g.cTypeToIris(seqElemType(ct)) & "]"
   case ct
   of "iris_str": "str"
   of "iris_view_String": "view[String]"
@@ -200,6 +224,20 @@ proc inferCType(g: CodeGen, e: Expr): string =
   if e of FloatLitExpr: return "double"
   if e of StringLitExpr or e of StringInterpExpr: return "iris_str"
   if e of StrLitExpr or e of StrInterpExpr: return "iris_String"
+  if e of ArrayLitExpr:
+    let a = ArrayLitExpr(e)
+    let elemT = if a.fillValue != nil: g.inferCType(a.fillValue)
+                elif a.elems.len > 0: g.inferCType(a.elems[0])
+                else: "int64_t"
+    let size = if a.fillCount != nil and a.fillCount of IntLitExpr: $IntLitExpr(a.fillCount).val
+               else: $a.elems.len
+    return "__array_" & elemT & "_" & size
+  if e of SeqLitExpr:
+    let s = SeqLitExpr(e)
+    let elemT = if s.fillValue != nil: g.inferCType(s.fillValue)
+                elif s.elems.len > 0: g.inferCType(s.elems[0])
+                else: "int64_t"
+    return "iris_Seq_" & elemT
   if e of HashTableLitExpr: return "iris_HashTable"
   if e of HashSetLitExpr: return "iris_HashSet"
   if e of HeapAllocExpr:
@@ -247,12 +285,22 @@ proc inferCType(g: CodeGen, e: Expr): string =
     let fa = FieldAccessExpr(e)
     if fa.expr of IdentExpr:
       let name = IdentExpr(fa.expr).name
+      let varType = g.varCType(name)
+      if fa.field == "len" and (varType.isArrayType() or varType.isSeqType()):
+        return "int64_t"
+      if fa.field == "cap" and (varType.isArrayType() or varType.isSeqType()):
+        return "int64_t"
       if name in g.enumNames: return name
-      let objType = g.varCType(name)
-      if objType.len > 0 and objType in g.typeFields:
-        for f in g.typeFields[objType]:
+      if varType.len > 0 and varType in g.typeFields:
+        for f in g.typeFields[varType]:
           if f.name == fa.field:
             return f.ctype
+  if e of IndexExpr:
+    let idx = IndexExpr(e)
+    if idx.expr of IdentExpr:
+      let varType = g.varCType(IdentExpr(idx.expr).name)
+      if varType.isArrayType(): return arrayElemType(varType)
+      if varType.isSeqType(): return seqElemType(varType)
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   if e of IfExpr:
@@ -266,6 +314,43 @@ proc inferCType(g: CodeGen, e: Expr): string =
   return "int64_t"
 
 proc ensureOptionType(g: var CodeGen, valType, optType: string)
+
+proc ensureArrayType(g: var CodeGen, elemType, size: string) =
+  let arrType = "__array_" & elemType & "_" & size
+  if arrType in g.emittedSeqTypes: return  # reuse the same tracking list
+  g.emittedSeqTypes.add(arrType)
+  var s = ""
+  s.add("typedef struct { " & elemType & " data[" & size & "]; } " & arrType & ";\n\n")
+  g.pendingSpecializations.add(s)
+
+proc ensureSeqType(g: var CodeGen, elemType: string) =
+  let seqType = "iris_Seq_" & elemType
+  if seqType in g.emittedSeqTypes: return
+  g.emittedSeqTypes.add(seqType)
+  var s = ""
+  s.add("typedef struct { " & elemType & "* data; size_t len; size_t cap; } " & seqType & ";\n")
+  # from N elements
+  s.add("static inline " & seqType & " " & seqType & "_from(" & elemType & "* arr, size_t n) {\n")
+  s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
+  s.add("  for (size_t i = 0; i < n; i++) data[i] = arr[i];\n")
+  s.add("  return (" & seqType & "){data, n, n};\n}\n")
+  # fill
+  s.add("static inline " & seqType & " " & seqType & "_fill(" & elemType & " val, size_t n) {\n")
+  s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
+  s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
+  s.add("  return (" & seqType & "){data, n, n};\n}\n")
+  # with capacity
+  s.add("static inline " & seqType & " " & seqType & "_with_cap(size_t cap) {\n")
+  s.add("  return (" & seqType & "){(" & elemType & "*)malloc(cap * sizeof(" & elemType & ")), 0, cap};\n}\n")
+  # add
+  s.add("static inline void " & seqType & "_add(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("  if (s->len == s->cap) {\n")
+  s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
+  s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
+  s.add("  }\n  s->data[s->len++] = val;\n}\n")
+  # free
+  s.add("static inline void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
+  g.pendingSpecializations.add(s)
 
 # ── Expression codegen ──
 
@@ -415,6 +500,15 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let fa = FieldAccessExpr(c.fn)
       if fa.field == "get" and c.args.len == 0:
         g.genExpr(fa.expr); g.emit(".value"); return
+      # .add(x) on Seq
+      if fa.field == "add" and c.args.len == 1 and fa.expr of IdentExpr:
+        let varName = IdentExpr(fa.expr).name
+        let varType = g.varCType(varName)
+        if varType.isSeqType():
+          g.emit(varType & "_add(&" & varName & ", ")
+          g.genExpr(c.args[0].value)
+          g.emit(")")
+          return
     if c.fn of IdentExpr:
       let name = IdentExpr(c.fn).name
       if name == "echo":
@@ -602,10 +696,19 @@ proc genExpr(g: var CodeGen, e: Expr) =
               "error: '" & f.field & "' is not public in module '" & name & "'")
         let prefix = g.nameAliases.getOrDefault("__mod_" & name, name)
         g.emit(prefix & "_" & f.field); return
+      let varType = g.varCType(name)
+      # .len / .cap on array → compile-time constant (cap == len for fixed arrays)
+      if (f.field == "len" or f.field == "cap") and varType.isArrayType():
+        g.emit(arraySize(varType)); return
+      # .len on Seq → field access
+      if f.field == "len" and varType.isSeqType():
+        g.emit("(int64_t)" & name & ".len"); return
+      # .cap on Seq → field access
+      if f.field == "cap" and varType.isSeqType():
+        g.emit("(int64_t)" & name & ".cap"); return
       if name in g.enumNames:
         g.emit(name & "_" & f.field); return
       # Check variant field access
-      let varType = g.varCType(name)
       if varType.len > 0 and varType in g.variantInfo:
         let vi = g.variantInfo[varType]
         for vf in vi.fields:
@@ -627,6 +730,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.genExpr(f.expr); g.emit("."); g.emit(f.field)
   elif e of IndexExpr:
     let idx = IndexExpr(e)
+    if idx.expr of IdentExpr:
+      let varType = g.varCType(IdentExpr(idx.expr).name)
+      if varType.isSeqType() or varType.isArrayType():
+        g.genExpr(idx.expr); g.emit(".data["); g.genExpr(idx.index); g.emit("]")
+        return
     g.genExpr(idx.expr); g.emit("["); g.genExpr(idx.index); g.emit("]")
   elif e of MacroCallExpr:
     let mc = MacroCallExpr(e)
@@ -646,39 +754,56 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.emit(")")
   elif e of ArrayLitExpr:
     let a = ArrayLitExpr(e)
+    let elemType = if a.fillValue != nil: g.inferCType(a.fillValue)
+                   elif a.elems.len > 0: g.inferCType(a.elems[0])
+                   else: "int64_t"
+    let size = if a.fillCount != nil and a.fillCount of IntLitExpr: $IntLitExpr(a.fillCount).val
+               else: $a.elems.len
+    let arrType = "__array_" & elemType & "_" & size
+    g.ensureArrayType(elemType, size)
     if a.fillValue != nil:
-      # [value: count] → iris_array_fill(value, count)
-      g.emit("iris_array_fill(")
-      g.genExpr(a.fillValue)
-      g.emit(", ")
-      g.genExpr(a.fillCount)
-      g.emit(")")
+      if a.fillValue of IntLitExpr and IntLitExpr(a.fillValue).val == 0:
+        g.emit("(" & arrType & "){{0}}")
+      elif a.fillCount of IntLitExpr:
+        let n = IntLitExpr(a.fillCount).val
+        g.emit("(" & arrType & "){{")
+        for i in 0..<n:
+          if i > 0: g.emit(", ")
+          g.genExpr(a.fillValue)
+        g.emit("}}")
+      else:
+        g.emit("(" & arrType & "){{0}}")
     else:
-      g.emit("{")
+      g.emit("(" & arrType & "){{")
       for i, el in a.elems:
         if i > 0: g.emit(", ")
         g.genExpr(el)
-      g.emit("}")
+      g.emit("}}")
   elif e of SeqLitExpr:
     let s = SeqLitExpr(e)
+    let elemType = if s.fillValue != nil: g.inferCType(s.fillValue)
+                   elif s.elems.len > 0: g.inferCType(s.elems[0])
+                   else: "int64_t"
+    let seqType = "iris_Seq_" & elemType
+    g.ensureSeqType(elemType)
     if s.capacityOnly:
-      # ~[:count] → iris_Seq_with_capacity(count)
-      g.emit("iris_Seq_with_capacity(")
+      g.emit(seqType & "_with_cap(")
       g.genExpr(s.fillCount)
       g.emit(")")
     elif s.fillValue != nil:
-      # ~[value: count] → iris_Seq_fill(value, count)
-      g.emit("iris_Seq_fill(")
+      g.emit(seqType & "_fill(")
       g.genExpr(s.fillValue)
       g.emit(", ")
       g.genExpr(s.fillCount)
       g.emit(")")
+    elif s.elems.len == 0:
+      g.emit("(" & seqType & "){NULL, 0, 0}")
     else:
-      g.emit("{")
+      g.emit(seqType & "_from((" & elemType & "[]){")
       for i, el in s.elems:
         if i > 0: g.emit(", ")
         g.genExpr(el)
-      g.emit("}")
+      g.emit("}, " & $s.elems.len & ")")
   elif e of HashTableLitExpr:
     let ht = HashTableLitExpr(e)
     g.emit("iris_HashTable_from(" & $ht.entries.len)
@@ -813,6 +938,11 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           "error: type mismatch in declaration '@" & d.name &
           "' — expected '" & g.cTypeToIris(ctype) &
           "', got '" & g.cTypeToIris(valType) & "'")
+    # Ensure runtime types are emitted
+    if ctype.isSeqType():
+      g.ensureSeqType(seqElemType(ctype))
+    if ctype.isArrayType():
+      g.ensureArrayType(arrayElemType(ctype), arraySize(ctype))
     g.varTypes[d.name] = ctype
     g.emitIndent()
     if d.value == nil:
@@ -1067,12 +1197,48 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.emit("; " & f.varName & (if r.inclusive: " <= " else: " < "))
       g.genExpr(r.finish)
       g.emit("; " & f.varName & "++) {\n")
+      g.varTypes[f.varName] = "int64_t"
+      g.indent += 1
+      for st in f.body: g.genStmt(st)
+      g.indent -= 1
+      g.emitLine("}")
+    elif f.iter of IdentExpr:
+      let iterName = IdentExpr(f.iter).name
+      let iterType = g.varCType(iterName)
+      let idx = "__i_" & f.varName
+      if iterType.isSeqType():
+        let elemT = seqElemType(iterType)
+        g.varTypes[f.varName] = elemT
+        g.emitIndent()
+        g.emit("for (size_t " & idx & " = 0; " & idx & " < " & iterName & ".len; " & idx & "++) {\n")
+        g.indent += 1
+        g.emitLine(elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];")
+        for st in f.body: g.genStmt(st)
+        g.indent -= 1
+        g.emitLine("}")
+      elif iterType.isArrayType():
+        let elemT = arrayElemType(iterType)
+        let size = arraySize(iterType)
+        g.varTypes[f.varName] = elemT
+        g.emitIndent()
+        g.emit("for (size_t " & idx & " = 0; " & idx & " < " & size & "; " & idx & "++) {\n")
+        g.indent += 1
+        g.emitLine(elemT & " " & f.varName & " = " & iterName & ".data[" & idx & "];")
+        for st in f.body: g.genStmt(st)
+        g.indent -= 1
+        g.emitLine("}")
+      else:
+        g.emitIndent(); g.emit("/* for " & f.varName & " in <collection> */ {\n")
+        g.indent += 1
+        for st in f.body: g.genStmt(st)
+        g.indent -= 1
+        g.emitLine("}")
     else:
       g.emitIndent(); g.emit("/* for " & f.varName & " in <collection> */ {\n")
-    g.indent += 1
-    for st in f.body: g.genStmt(st)
-    g.indent -= 1
-    g.emitLine("}")
+      g.indent += 1
+      for st in f.body: g.genStmt(st)
+      g.indent -= 1
+      g.emitLine("}")
     if f.label.len > 0: g.emitLine(f.label & "_end: ;")
 
   elif s of BreakStmt:
@@ -1438,6 +1604,22 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   for s in stmts:
     if s of ObjectDeclStmt or s of ErrorDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt or s of ConceptDeclStmt:
       g.genStmt(s); g.emit("\n")
+
+  # Pre-emit Seq/array types referenced in function signatures
+  for s in stmts:
+    if s of FnDeclStmt:
+      let f = FnDeclStmt(s)
+      if f.returnType != nil:
+        let rt = g.typeToCStr(f.returnType)
+        if rt.isSeqType(): g.ensureSeqType(seqElemType(rt))
+        if rt.isArrayType(): g.ensureArrayType(arrayElemType(rt), arraySize(rt))
+      for p in f.params:
+        let pt = g.typeToCStr(p.typeAnn)
+        if pt.isSeqType(): g.ensureSeqType(seqElemType(pt))
+        if pt.isArrayType(): g.ensureArrayType(arrayElemType(pt), arraySize(pt))
+  if g.pendingSpecializations.len > 0:
+    g.emit(g.pendingSpecializations)
+    g.pendingSpecializations = ""
 
   # Result structs + forward declarations (skip generics — monomorphized later)
   for s in stmts:

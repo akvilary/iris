@@ -397,6 +397,34 @@ Return value is set explicitly:
 
 Compiler verifies that `result` is set on all execution paths.
 
+#### `result` and ownership
+
+`result =` is a **move**, not a copy. For heap types (`String`, `Seq`, `HashTable`),
+ownership transfers to the caller — the source variable becomes invalid:
+
+```
+@makeNums func() ok Seq[int]:
+  @nums mut = ~[1, 2, 3]
+  nums.add(4)
+  result = nums              # ownership moves to result, nums is now invalid
+                              # nums is NOT freed — caller owns the data
+
+@makeDirect func() ok Seq[int]:
+  result = ~[1, 2, 3]        # literal created directly in result, no intermediate
+
+@process func() ok Seq[int]:
+  @temp mut = ~[10, 20]
+  @other mut = ~[30, 40]     # other is NOT moved to result
+  result = temp               # temp moved to result
+                              # other freed at scope end (not moved)
+```
+
+At function exit:
+- Moved variables — stack metadata (pointer, len, cap) destroyed as usual,
+  but the **heap buffer is not freed** (caller owns it via `result`)
+- Other local heap variables — **heap buffer freed**, stack metadata destroyed
+- Stack-only variables — destroyed as usual
+
 ### Declaration without initialization
 
 Variables can be declared without a value — assigned later:
