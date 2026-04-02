@@ -29,6 +29,8 @@ type
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
     movedVars: HashSet[string] # variables moved via result = x
     fnParamMods: Table[string, seq[ParamModifier]]  # func name -> param modifiers
+    currentFnReturnsBorrow: bool  # true if current function returns view/str
+    currentFnBorrowParams: HashSet[string]  # borrow param names in current function
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
 
@@ -113,6 +115,15 @@ proc isHeapExpr(e: Expr): bool =
   if e of HashTableLitExpr: return true  # ~{k: v}
   if e of HashSetLitExpr: return true  # ~{v}
   if e of HeapAllocExpr: return true  # ~Type(...)
+  return false
+
+proc isBorrowType(t: TypeExpr): bool =
+  ## Check if return type is a borrow (view[T] or str)
+  if t == nil: return false
+  if t of NamedType:
+    return NamedType(t).name == "str"
+  if t of GenericType:
+    return GenericType(t).name == "view"
   return false
 
 proc isStrType(t: TypeExpr): bool =
@@ -333,6 +344,12 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
   elif s of ResultAssignStmt:
     let rs = ResultAssignStmt(s)
     ctx.analyzeExpr(rs.value)
+    # Lifetime check: if function returns borrow, result must come from a param
+    if ctx.currentFnReturnsBorrow and rs.value of IdentExpr:
+      let srcName = IdentExpr(rs.value).name
+      if srcName notin ctx.currentFnBorrowParams and srcName != "result":
+        ctx.error("error: cannot return borrow of local variable '" & srcName &
+          "' — it will be freed when function exits")
     # Mark variable as moved (ownership transfer)
     if rs.value of IdentExpr:
       ctx.movedVars.incl(IdentExpr(rs.value).name)
@@ -348,8 +365,12 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.pushScope()
     let savedParams = ctx.fnParams
     let savedMoved = ctx.movedVars
+    let savedReturnsBorrow = ctx.currentFnReturnsBorrow
+    let savedBorrowParams = ctx.currentFnBorrowParams
     ctx.fnParams = initHashSet[string]()
     ctx.movedVars = initHashSet[string]()
+    ctx.currentFnReturnsBorrow = isBorrowType(f.returnType)
+    ctx.currentFnBorrowParams = initHashSet[string]()
     for p in f.params:
       # str cannot be passed as mut — it references read-only data (.rodata)
       if p.modifier == paramMut and isStrType(p.typeAnn):
@@ -357,12 +378,17 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn))
       ctx.fnParams.incl(p.name)
       ctx.markInitialized(p.name)
+      # Track borrow params (not own = borrow)
+      if p.modifier != paramOwn:
+        ctx.currentFnBorrowParams.incl(p.name)
     # 'result' is always available in functions with return type
     if f.returnType != nil:
       ctx.fnParams.incl("result")
     ctx.analyzeBody(f.body)
     ctx.fnParams = savedParams
     ctx.movedVars = savedMoved
+    ctx.currentFnReturnsBorrow = savedReturnsBorrow
+    ctx.currentFnBorrowParams = savedBorrowParams
     ctx.popScope()
 
   elif s of IfStmt:
