@@ -26,6 +26,7 @@ type
     initVars: HashSet[string] # definitely-initialized variable names
     knownTypes: HashSet[string]
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
+    movedVars: HashSet[string] # variables moved via result = x
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
 
@@ -123,8 +124,11 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
   if e of IdentExpr:
     let name = IdentExpr(e).name
     if ctx.lookupVar(name):
+      # Check use-after-move
+      if name in ctx.movedVars:
+        ctx.error("error: variable '" & name & "' used after move — ownership was transferred via result")
       # Declared — check assigned-before-use
-      if not ctx.isInitialized(name):
+      elif not ctx.isInitialized(name):
         ctx.error("error: variable '" & name & "' used before initialization")
     else:
       # Not declared in any scope
@@ -270,7 +274,11 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.analyzeExpr(ca.value)
 
   elif s of ResultAssignStmt:
-    ctx.analyzeExpr(ResultAssignStmt(s).value)
+    let rs = ResultAssignStmt(s)
+    ctx.analyzeExpr(rs.value)
+    # Mark variable as moved (ownership transfer)
+    if rs.value of IdentExpr:
+      ctx.movedVars.incl(IdentExpr(rs.value).name)
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
@@ -280,7 +288,9 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # Analyze body in a new scope with params as initialized
     ctx.pushScope()
     let savedParams = ctx.fnParams
+    let savedMoved = ctx.movedVars
     ctx.fnParams = initHashSet[string]()
+    ctx.movedVars = initHashSet[string]()
     for p in f.params:
       # str cannot be passed as mut — it references read-only data (.rodata)
       if p.modifier == paramMut and isStrType(p.typeAnn):
@@ -293,6 +303,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.fnParams.incl("result")
     ctx.analyzeBody(f.body)
     ctx.fnParams = savedParams
+    ctx.movedVars = savedMoved
     ctx.popScope()
 
   elif s of IfStmt:
@@ -498,6 +509,7 @@ proc analyze*(stmts: seq[Stmt], filename: string = ""): seq[string] =
     initVars: initHashSet[string](),
     knownTypes: initHashSet[string](),
     fnParams: initHashSet[string](),
+    movedVars: initHashSet[string](),
     filename: filename,
   )
   ctx.pushScope()
