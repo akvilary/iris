@@ -38,8 +38,9 @@ type
     emittedSeqTypes*: seq[string]  # already emitted Seq specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
-    movedVars*: seq[string]  # variables moved via result = x
+    movedVars*: seq[string]  # variables moved via result = x or own param
     scopeVars*: seq[seq[string]]  # stack of variable names per scope
+    fnOwnParams*: Table[string, seq[int]]  # func name -> indices of own params
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -1575,6 +1576,12 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let savedMoved = g.movedVars
       g.movedVars = @[]
       g.pushScope()
+      # Register param types and track own params for auto-free
+      for p in f.params:
+        let ct = g.typeToCStr(p.typeAnn)
+        g.varTypes[p.name] = ct
+        if p.modifier == paramOwn and ct.isHeapType():
+          g.trackVar(p.name)
       for st in f.body: g.genStmt(st)
       g.emitScopeCleanup()
       g.popScope()
@@ -1591,6 +1598,12 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let savedMoved = g.movedVars
       g.movedVars = @[]
       g.pushScope()
+      # Register param types and track own params for auto-free
+      for p in f.params:
+        let ct = g.typeToCStr(p.typeAnn)
+        g.varTypes[p.name] = ct
+        if p.modifier == paramOwn and ct.isHeapType():
+          g.trackVar(p.name)
       for st in f.body: g.genStmt(st)
       g.emitScopeCleanup()
       g.popScope()
@@ -1696,6 +1709,18 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ExprStmt:
     g.emitIndent(); g.genExpr(ExprStmt(s).expr); g.emit(";\n")
+    # Track moved args for own params
+    let expr = ExprStmt(s).expr
+    if expr of CallExpr:
+      let call = CallExpr(expr)
+      if call.fn of IdentExpr:
+        let fnName = IdentExpr(call.fn).name
+        if fnName in g.fnOwnParams:
+          for idx in g.fnOwnParams[fnName]:
+            if idx < call.args.len and call.args[idx].value of IdentExpr:
+              let argName = IdentExpr(call.args[idx].value).name
+              if argName notin g.movedVars:
+                g.movedVars.add(argName)
 
   elif s of ObjectDeclStmt:
     let o = ObjectDeclStmt(s)
@@ -2142,6 +2167,13 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
         g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ");\n")
         g.fnReturnTypes[f.name] = ret
         g.fnParamTypes[f.name] = f.params.mapIt(g.typeToCStr(it.typeAnn))
+      # Track own param indices
+      var ownIndices: seq[int]
+      for i, p in f.params:
+        if p.modifier == paramOwn:
+          ownIndices.add(i)
+      if ownIndices.len > 0:
+        g.fnOwnParams[f.name] = ownIndices
   g.emit("\n")
 
   # Functions (non-generic)

@@ -27,6 +27,7 @@ type
     knownTypes: HashSet[string]
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
     movedVars: HashSet[string] # variables moved via result = x
+    fnOwnParams: Table[string, seq[int]]  # func name -> indices of own params
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
 
@@ -126,7 +127,7 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     if ctx.lookupVar(name):
       # Check use-after-move
       if name in ctx.movedVars:
-        ctx.error("error: variable '" & name & "' used after move — ownership was transferred via result")
+        ctx.error("error: variable '" & name & "' used after move — ownership was transferred")
       # Declared — check assigned-before-use
       elif not ctx.isInitialized(name):
         ctx.error("error: variable '" & name & "' used before initialization")
@@ -146,6 +147,13 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     ctx.analyzeExpr(call.fn)
     for arg in call.args:
       ctx.analyzeExpr(arg.value)
+    # Mark arguments passed to own params as moved
+    if call.fn of IdentExpr:
+      let fnName = IdentExpr(call.fn).name
+      if fnName in ctx.fnOwnParams:
+        for idx in ctx.fnOwnParams[fnName]:
+          if idx < call.args.len and call.args[idx].value of IdentExpr:
+            ctx.movedVars.incl(IdentExpr(call.args[idx].value).name)
 
   elif e of FieldAccessExpr:
     ctx.analyzeExpr(FieldAccessExpr(e).expr)
@@ -285,6 +293,13 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # Declare the function name in current scope
     ctx.declareVar(f.name, VarInfo(name: f.name, modifier: declDefault))
     ctx.markInitialized(f.name)
+    # Track which params are own
+    var ownIndices: seq[int]
+    for i, p in f.params:
+      if p.modifier == paramOwn:
+        ownIndices.add(i)
+    if ownIndices.len > 0:
+      ctx.fnOwnParams[f.name] = ownIndices
     # Analyze body in a new scope with params as initialized
     ctx.pushScope()
     let savedParams = ctx.fnParams
@@ -510,6 +525,7 @@ proc analyze*(stmts: seq[Stmt], filename: string = ""): seq[string] =
     knownTypes: initHashSet[string](),
     fnParams: initHashSet[string](),
     movedVars: initHashSet[string](),
+    fnOwnParams: initTable[string, seq[int]](),
     filename: filename,
   )
   ctx.pushScope()
