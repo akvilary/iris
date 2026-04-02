@@ -38,6 +38,8 @@ type
     emittedSeqTypes*: seq[string]  # already emitted Seq specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
+    movedVars*: seq[string]  # variables moved via result = x
+    scopeVars*: seq[seq[string]]  # stack of variable names per scope
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -137,6 +139,36 @@ proc htValType(ct: string): string =
   if sep >= 0: rest[sep+2..^1] else: ""
 
 proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
+
+proc isHeapType(ct: string): bool =
+  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType()
+
+proc pushScope(g: var CodeGen) =
+  g.scopeVars.add(@[])
+
+proc trackVar(g: var CodeGen, name: string) =
+  if g.scopeVars.len > 0:
+    g.scopeVars[^1].add(name)
+
+proc emitScopeCleanup(g: var CodeGen) =
+  if g.scopeVars.len == 0: return
+  let vars = g.scopeVars[^1]
+  for i in countdown(vars.len - 1, 0):
+    let name = vars[i]
+    if name in g.movedVars: continue
+    let ct = g.varCType(name)
+    if ct == "iris_String":
+      g.emitLine("free(" & name & ".data);")
+    elif ct.isSeqType():
+      g.emitLine(ct & "_free(&" & name & ");")
+    elif ct.isHashTableType():
+      g.emitLine(ct & "_free(&" & name & ");")
+    elif ct.isHashSetType():
+      g.emitLine(ct & "_free(&" & name & ");")
+
+proc popScope(g: var CodeGen) =
+  if g.scopeVars.len > 0:
+    g.scopeVars.setLen(g.scopeVars.len - 1)
 
 proc cTypeToIris(g: CodeGen, ct: string): string =
   ## Convert C type name back to Iris type name for error messages.
@@ -1332,6 +1364,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if ctype.isHashSetType():
       g.ensureHashSetType(hsElemType(ctype))
     g.varTypes[d.name] = ctype
+    if ctype.isHeapType():
+      g.trackVar(d.name)
     g.emitIndent()
     if d.value == nil:
       # Declaration without value: @x int — assigned later
@@ -1480,6 +1514,12 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else:
       g.emit("__result = ")
     g.genExpr(val); g.emit(";\n")
+    # Track moved variable (ownership transfer to result)
+    if val of IdentExpr:
+      let varName = IdentExpr(val).name
+      let ct = g.varCType(varName)
+      if ct.isHeapType() and varName notin g.movedVars:
+        g.movedVars.add(varName)
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
@@ -1532,7 +1572,13 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.emitLine("__result.kind = " & resultName & "_Ok;")
       g.inResultFunc = true
       g.currentResultName = resultName
+      let savedMoved = g.movedVars
+      g.movedVars = @[]
+      g.pushScope()
       for st in f.body: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
+      g.movedVars = savedMoved
       g.inResultFunc = false
       g.emitLine("return __result;")
       g.indent -= 1
@@ -1542,7 +1588,13 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
       g.indent += 1
       if hasReturn: g.emitLine(ret & " __result;")
+      let savedMoved = g.movedVars
+      g.movedVars = @[]
+      g.pushScope()
       for st in f.body: g.genStmt(st)
+      g.emitScopeCleanup()
+      g.popScope()
+      g.movedVars = savedMoved
       if hasReturn: g.emitLine("return __result;")
       g.indent -= 1
       g.emit("}\n")
@@ -2106,7 +2158,10 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
     let origOutput = g.output
     g.output = ""
     g.indent = 1
+    g.pushScope()
     for s in topLevel: g.genStmt(s)
+    g.emitScopeCleanup()
+    g.popScope()
     g.emitLine("return 0;")
     let mainBody = g.output
     g.output = origOutput
