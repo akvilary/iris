@@ -44,10 +44,13 @@ Minimal compiler that can compile basic Iris programs to C.
 
 ### Phase 4 — Collections + Strings
 
-- [ ] array[T, N] (stack)
-- [ ] Seq[T] (heap), `~[...]` literal
+- [x] array[T, N] (stack, struct-wrapped, fill syntax)
+- [x] Seq[T] (heap): literal, fill, capacity, add, remove, removeSwap, pop, insert, contains, find
+- [x] HashTable[K,V] (wyhash, linear probing, backward-shift deletion)
+- [x] HashSet[T] (same algorithm, separate implementation)
 - [x] view[T] (immutable view, pointer + length)
 - [x] Str (heap): ~"..." literal, Str() constructor, ~"...{expr}..." interpolation
+- [x] for-in iteration over array, Seq
 
 ### Phase 5 — Concurrency
 
