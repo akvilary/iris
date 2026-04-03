@@ -1,0 +1,7 @@
+# EXPECT C: iris_tmp_
+# EXPECT C: iris_String_free(&iris_tmp_
+# heap temporary in function argument must be wrapped in temp and freed
+@greet! func(@name String):
+  *echo(name)
+
+greet(~"test")

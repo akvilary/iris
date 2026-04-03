@@ -1,0 +1,5 @@
+# EXPECT C: iris_String_free(&t);
+# @t = s moves ownership — s must NOT be freed (only t)
+@s = ~"hello"
+@t = s
+*echo(t)

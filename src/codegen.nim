@@ -1624,6 +1624,12 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           g.emit(ctype & " " & d.name & " = ")
         g.genExpr(d.value)
         g.emit(";\n")
+    # Track move: @t = s where s is heap → mark s as moved
+    if d.value != nil and d.value of IdentExpr:
+      let srcName = IdentExpr(d.value).name
+      let srcType = g.varCType(srcName)
+      if g.needsFree(srcType) and srcName notin g.movedVars:
+        g.movedVars.add(srcName)
 
   elif s of DestructDeclStmt:
     let dd = DestructDeclStmt(s)
@@ -1998,9 +2004,28 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.emitLine("return iris_result;")
 
   elif s of ExprStmt:
-    g.emitIndent(); g.genExpr(ExprStmt(s).expr); g.emit(";\n")
-    # Track moved args for own params
     let expr = ExprStmt(s).expr
+    # Wrap heap temporaries in call arguments with temp vars
+    var temps: seq[tuple[name, ctype: string]]
+    if expr of CallExpr:
+      let call = CallExpr(expr)
+      for i in 0..<call.args.len:
+        let arg = call.args[i].value
+        if not (arg of IdentExpr) and not (arg of IntLitExpr) and
+           not (arg of FloatLitExpr) and not (arg of BoolLitExpr) and
+           not (arg of StringLitExpr) and not (arg of RuneLitExpr):
+          let ct = g.inferCType(arg)
+          if g.needsFree(ct):
+            let tmp = "iris_tmp_" & $g.tmpCounter; g.tmpCounter += 1
+            g.emitIndent(); g.emit(ct & " " & tmp & " = "); g.genExpr(arg); g.emit(";\n")
+            g.varTypes[tmp] = ct
+            call.args[i].value = IdentExpr(name: tmp)
+            temps.add((tmp, ct))
+    g.emitIndent(); g.genExpr(expr); g.emit(";\n")
+    # Free temporaries after call
+    for t in temps:
+      g.emitLine(g.freeExprStr(t.name, t.ctype))
+    # Track moved args for own params
     if expr of CallExpr:
       let call = CallExpr(expr)
       if call.fn of IdentExpr:
