@@ -89,7 +89,7 @@ declare a variable before and assign inside:
 @loop while true:
   @line = readLine()
   if line:
-    input = line.get()
+    input = ^line
     break loop
 
 # Search pattern — declare before loop:
@@ -176,12 +176,12 @@ if isReady:            # OK
 # Option — true if some:
 @a = some(42)
 if a:
-  *echo(a.get())        # .get() to extract value
+  *echo(^a)        # ^ to extract value
 
 # Result union — true if ok:
 @cfg = readConfig("app.toml")
 if cfg:
-  start(cfg.get())     # .get() to extract value
+  start(^cfg)     # ^ to extract value
 
 # Other types — explicit comparison required:
 if count > 0:          # OK
@@ -191,7 +191,7 @@ if not name.isEmpty:   # OK
 ```
 
 Falsy values: `false`, `none`, `error`. Everything else is true.
-No automatic unwrapping — use `.get()` to extract the value.
+No automatic unwrapping — use `^x` to unwrap. Compiler verifies the value is checked first.
 
 `else:` on expressions follows the same rule — enters else on none or error:
 
@@ -354,7 +354,7 @@ Arguments can be passed by name using `=`. Order doesn't matter for named argume
 - `!` after name = public
 - `ok T` — pure function, cannot return errors
 - `ok T else E1, E2` — can return E1 or E2, compiler checks
-- `.get()` to unwrap result — always explicit, no auto-unwrap
+- `^` to unwrap result — always explicit, no auto-unwrap
 - `?` operator for error propagation
 - Errors returned via `result = Error(...)` + `return` (no `raise` keyword)
 
@@ -977,7 +977,7 @@ Works with `?`, `case`, and `else` — same patterns as error handling.
 
 # Pattern matching
 case a:
-  of some: *echo(a.get())           # 42
+  of some: *echo(^a)           # 42
   of none: *echo("nothing")
 
 # else — default value
@@ -1286,7 +1286,7 @@ case c:
 @resp = fetch("http://api.com")
 case resp:
   of ok:
-    @data = resp.get()
+    @data = ^resp
     *echo(data)
   of ServerError:
     *echo("server error")
@@ -1299,7 +1299,7 @@ Partial match with `else`:
 ```
 case resp:
   of ok:
-    @data = resp.get()
+    @data = ^resp
   else:
     *echo("some error occurred")
 ```
@@ -1569,11 +1569,11 @@ block:
   if not cfg:
     *echo("no config, using defaults")
     break setup
-  @db = connect(cfg.get().dbUrl)
+  @db = connect(^cfg.dbUrl)
   if not db:
     *echo("no db connection")
     break setup
-  migrate(db.get())
+  migrate(^db)
 ```
 
 ### Blocks do not return values
@@ -1600,7 +1600,7 @@ If data is passed to a `spawn`, no other spawn can access it mutably.
 # OK — each spawn returns its own result:
 @a = spawn fetch("url1")
 @b = spawn fetch("url2")
-@buf = ~[a.get(), b.get()]
+@buf = ~[^a, ^b]
 ```
 
 | Problem | Prevented? | How |
@@ -1626,14 +1626,14 @@ If data is passed to a `spawn`, no other spawn can access it mutably.
       @data = fetch(url)
         if not data:
           break urls_loop
-      ch.send(data.get())
+      ch.send(^data)
 
   for @_ in urls:
     @recv block:
       spawn:
         @val = ch.receive()
         if val:
-          process(val.get())
+          process(^val)
           break recv
       spawn:
         after(10.sec)
@@ -1718,12 +1718,12 @@ block:
   spawn:
     @val = ch1.receive()
     if val:
-      process(val.get())
+      process(^val)
       break race
   spawn:
     @val = ch2.receive()
     if val:
-      process(val.get())
+      process(^val)
       break race
   spawn:
     after(5.sec)
@@ -1748,7 +1748,7 @@ Iris has **no async/await**. All functions are the same:
 # Calling — just a call, no await:
 @process func() ok void else NetError:
   @data = fetch("https://api.example.com")?
-  *echo(data.get())
+  *echo(^data)
 ```
 
 Concurrency is achieved via `block spawn`, not async/await:
@@ -1791,7 +1791,7 @@ Return type is the success type, errors listed after `else`:
 `ok T else Error1, Error2`. All possible errors must be listed.
 Errors are returned via `result = Error(...)` — same mechanism as success values.
 No `raise` keyword — one unified `result` mechanism for both paths.
-No automatic unwrapping — always use `.get()` to extract ok value.
+No automatic unwrapping — use `^x` to unwrap. Compiler verifies the value is checked first.
 
 ### Declaring errors
 
@@ -1869,7 +1869,7 @@ Caller must include compatible error types in its own signature:
 ```
 @loadApp! func() ok App else IoError, ParseError:
   @cfg = readConfig("app.toml")?     # IoError | ParseError propagated
-  result = newApp(cfg.get())
+  result = newApp(^cfg)
 ```
 
 #### 2. `if`/`else` — handle inline
@@ -1882,7 +1882,7 @@ Assign result, then check with `if`:
 if not conn:
   *echo("connection failed")
   quit()
-@c = conn.get()           # explicit unwrap — always required
+@c = ^conn           # explicit unwrap — always required
 
 # Fallback value
 @cfg = readConfig("app.toml")
@@ -1896,7 +1896,7 @@ if not cfg:
 @response = fetch("http://api.com/data")
 case response:
   of ok:
-    @data = response.get()
+    @data = ^response
     *echo(data)
   of ServerError:
     *echo("server error")
@@ -1912,7 +1912,7 @@ case response:
 |--------|-------------|
 | `result = Error(...)` | Return an error from function |
 | `?` | Propagate error to caller |
-| `.get()` | Explicit unwrap of ok value — always required |
+| `^x` | Unwrap Option/Result value — compiler verifies checked first |
 | `if`/`else` | Check result, handle error inline |
 | `case` | Pattern match on `ok` and specific error types |
 

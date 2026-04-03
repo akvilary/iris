@@ -32,6 +32,7 @@ type
     currentFnReturnsBorrow: bool  # true if current function returns view/str
     currentFnReturnType: TypeExpr  # current function's return type
     currentFnBorrowParams: HashSet[string]  # borrow param names in current function
+    guardedVars: HashSet[string]  # Option/Result vars checked by if/case (valid for ^)
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
 
@@ -281,6 +282,15 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
   elif e of DollarExpr:
     ctx.analyzeExpr(DollarExpr(e).expr)
 
+  elif e of UnwrapExpr:
+    let uw = UnwrapExpr(e)
+    ctx.analyzeExpr(uw.expr)
+    # Check that the unwrapped variable is guarded by if/case
+    if uw.expr of IdentExpr:
+      let name = IdentExpr(uw.expr).name
+      if name notin ctx.guardedVars:
+        ctx.error("error: '^" & name & "' — Option/Result must be checked before unwrap (use 'if " & name & ":' or 'case " & name & ":')")
+
   elif e of QuestionExpr:
     ctx.analyzeExpr(QuestionExpr(e).expr)
 
@@ -455,9 +465,14 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       for branch in ifS.branches:
         ctx.initVars = initBefore
         ctx.movedVars = movedBefore
+        # Guard: if condition is a simple variable, mark as guarded for ^
+        let savedGuarded = ctx.guardedVars
+        if branch.cond of IdentExpr:
+          ctx.guardedVars.incl(IdentExpr(branch.cond).name)
         ctx.pushScope()
         ctx.analyzeBody(branch.body)
         ctx.popScope()
+        ctx.guardedVars = savedGuarded
         branchInits.add(ctx.initVars)
         branchMoves.add(ctx.movedVars)
 
@@ -485,9 +500,13 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       for branch in ifS.branches:
         ctx.initVars = initBefore
         ctx.movedVars = movedBefore
+        let savedGuarded = ctx.guardedVars
+        if branch.cond of IdentExpr:
+          ctx.guardedVars.incl(IdentExpr(branch.cond).name)
         ctx.pushScope()
         ctx.analyzeBody(branch.body)
         ctx.popScope()
+        ctx.guardedVars = savedGuarded
       ctx.initVars = initBefore
       ctx.movedVars = movedBefore
 
@@ -538,9 +557,14 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
 
     for branch in cs.branches:
       ctx.initVars = initBefore
+      let savedGuarded = ctx.guardedVars
+      # Guard: case expr is guarded in of some/of Ok branches
+      if cs.expr of IdentExpr and branch.pattern.kind in {patSome, patOk}:
+        ctx.guardedVars.incl(IdentExpr(cs.expr).name)
       ctx.pushScope()
       ctx.analyzeBody(branch.body)
       ctx.popScope()
+      ctx.guardedVars = savedGuarded
       branchInits.add(ctx.initVars)
 
     if cs.elseBranch.len > 0:

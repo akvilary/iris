@@ -229,6 +229,9 @@ proc parseUnary(P: var Parser): Expr =
   of tkDollar:
     discard P.advance()
     DollarExpr(expr: P.parsePostfix())
+  of tkCaret:
+    discard P.advance()
+    UnwrapExpr(expr: P.parsePostfix())
   else:
     P.parsePostfix()
 

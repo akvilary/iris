@@ -1,0 +1,8 @@
+# EXPECT RUN: 42
+# ^x is valid inside case x: of some:
+@a = some(42)
+case a:
+  of some:
+    *echo(^a)
+  of none:
+    *echo("none")

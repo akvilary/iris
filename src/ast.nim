@@ -156,6 +156,9 @@ type
   DollarExpr* = ref object of Expr
     expr*: Expr
 
+  UnwrapExpr* = ref object of Expr
+    expr*: Expr
+
   QuestionExpr* = ref object of Expr
     expr*: Expr
 

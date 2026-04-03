@@ -1304,6 +1304,8 @@ proc genExpr(g: var CodeGen, e: Expr) =
       g.emit("/* macro *" & mc.name & " not yet implemented */")
   elif e of DollarExpr:
     g.genEchoArg(e)  # reuse echo arg logic
+  elif e of UnwrapExpr:
+    g.genExpr(UnwrapExpr(e).expr); g.emit(".value")
   elif e of QuestionExpr:
     g.genExpr(QuestionExpr(e).expr)
   elif e of TupleLitExpr:

@@ -47,6 +47,7 @@ type
     tkQuestion    # ?
     tkAt          # @
     tkDollar      # $
+    tkCaret       # ^
     tkTilde       # ~
     tkAmpersand   # &
 
