@@ -73,7 +73,7 @@ Minimal compiler that can compile basic Iris programs to C.
 ### Phase 7 — Metaprogramming
 
 - [ ] Macros (`*name()` call syntax)
-- [ ] `^expr^` unquote in ast.quote
+- [ ] `<<expr>>` unquote in ast.quote
 - [ ] ast.expand, ast.export, ast.fieldsOf
 - [x] *echo as built-in macro
 - [ ] DSL support

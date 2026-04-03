@@ -1443,19 +1443,19 @@ To explicitly export a variable into caller's scope — use `ast.export`:
 *echo(elapsed)      # available because of ast.export
 ```
 
-### ast.quote — code generation with `^expr^`
+### ast.quote — code generation with `<<expr>>`
 
-`ast.quote` creates AST from a code template. `^expr^` inserts
+`ast.quote` creates AST from a code template. `<<expr>>` inserts
 (unquotes) a value as a **name** into the generated code.
 
-Rule: `^expr^` only when substituting a **name** (type name, field name).
-Iterating over AST objects uses normal `for` — no `^^ ` needed.
+Rule: `<<expr>>` only when substituting a **name** (type name, field name).
+Iterating over AST objects uses normal `for` — no special syntax needed.
 
 ```
 @getter macro(@field, @typ):
   ast.quote:
-    @get_^field.name^+ func(@self ^ast.nameOf(typ)^) ok ^field.type^:
-      result = self.^field.name^
+    @get_<<field.name>>! func(@some <<ast.nameOf(typ)>>) ok <<field.type>>:
+      result = some.<<field.name>>.clone()
 ```
 
 ### AST manipulation
@@ -1488,10 +1488,10 @@ Works with both regular objects and object variants:
     @fields = ast.fieldsOf(body)
 
     ast.quote:
-      @eq! func(@a ^name^, @b ^name^) ok bool:
+      @eq! func(@a <<name>>, @b <<name>>) ok bool:
         result = true
         for @f in fields:
-          if a.^f.name^ != b.^f.name^:
+          if a.<<f.name>> != b.<<f.name>>:
             result = false
             return
 
@@ -1516,7 +1516,7 @@ Works with both regular objects and object variants:
 
 ### Bitwise operations
 
-Bitwise ops use words (like Nim), freeing `^` for macros:
+Bitwise ops use words (like Nim):
 
 | Operation | Syntax | Example |
 |-----------|--------|---------|
