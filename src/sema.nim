@@ -133,7 +133,7 @@ proc inferType(ctx: SemaContext, e: Expr): TypeExpr =
   if e of BoolLitExpr: return NamedType(name: "bool")
   if e of RuneLitExpr: return NamedType(name: "rune")
   if e of StringLitExpr: return NamedType(name: "str")
-  if e of StringInterpExpr: return GenericType(name: "view", args: @[TypeExpr(NamedType(name: "String"))])
+  # StringInterpExpr without ~ is a compile error (handled in analyzeExpr)
   if e of StrLitExpr or e of StrInterpExpr: return NamedType(name: "String")
   if e of IdentExpr:
     let info = ctx.lookupVarInfo(IdentExpr(e).name)
@@ -237,6 +237,7 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     ctx.analyzeExpr(IndexExpr(e).index)
 
   elif e of StringInterpExpr:
+    ctx.error("error: string interpolation requires ~ prefix — use ~\"...{expr}...\" (allocates on heap)")
     for part in StringInterpExpr(e).parts:
       if part.isExpr: ctx.analyzeExpr(part.expr)
 

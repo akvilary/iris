@@ -13,7 +13,7 @@
 # String interpolation
 @name = "Iris"
 @version = 1
-*echo("Welcome to {name}!")
+*echo(~"Welcome to {name}!")
 
 # $ operator on enum
 @HttpMethod! enum:
@@ -24,7 +24,7 @@
 *echo($method)
 
 # Bool in interpolation
-*echo("Ready: {isReady}")
+*echo(~"Ready: {isReady}")
 
 # Nested function calls
 @twice! func(@n int) ok int:

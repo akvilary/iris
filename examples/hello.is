@@ -3,7 +3,7 @@
 
 @name = "Alice"
 @age = 30
-*echo("Hello, {name}!")
+*echo(~"Hello, {name}!")
 
 if age > 18:
   *echo("adult")

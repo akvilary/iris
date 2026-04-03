@@ -84,7 +84,7 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
     of "float", "float64": "double"
     of "float32": "float"
     of "bool": "bool"
-    of "str": "iris_str"  # static ref — typedef for iris_view_String
+    of "str": "iris_str"
     of "String": "iris_String"
     of "natural": "uint64_t"
     of "rune": "int32_t"
@@ -223,7 +223,7 @@ proc emitStructFree(g: var CodeGen, typeName: string) =
 
 proc needsRefParam(ct: string): bool =
   ## Types that should be passed by pointer for mut params
-  ct.isHeapType() or ct.isArrayType() or ct == "iris_str" or ct == "iris_view_String"
+  ct.isHeapType() or ct.isArrayType() or ct == "iris_str"
 
 proc addrOf(g: CodeGen, name: string): string =
   ## Return "&name" for regular vars, "name" for ref vars (already pointer)
@@ -276,7 +276,6 @@ proc cTypeToIris(g: CodeGen, ct: string): string =
     return "HashSet[" & g.cTypeToIris(hsElemType(ct)) & "]"
   case ct
   of "iris_str": "str"
-  of "iris_view_String": "view[String]"
   of "iris_String": "String"
   of "int64_t": "int"
   of "double": "float"
@@ -287,17 +286,10 @@ proc cTypeToIris(g: CodeGen, ct: string): string =
 
 proc isAssignable(g: CodeGen, fromType, toType: string): bool =
   ## Check if fromType can be assigned to toType.
-  ## Permissive by default — only rejects known incompatible string pairs.
   if fromType == toType: return true
-  # str → view[String]: OK (static ref is a valid view)
-  if fromType == "iris_str" and toType == "iris_view_String": return true
-  # String → view[String]: OK (owned buffer can be viewed)
-  if fromType == "iris_String" and toType == "iris_view_String": return true
-  # Explicit rejections — known incompatible string pairs:
-  if toType == "iris_str" and fromType in ["iris_view_String", "iris_String"]:
-    return false  # view[String]/String → str: NO
-  if toType == "iris_String" and fromType in ["iris_str", "iris_view_String"]:
-    return false  # str/view[String] → String: NO (must use constructor)
+  # str and String are incompatible — no implicit conversion
+  if toType == "iris_str" and fromType == "iris_String": return false
+  if toType == "iris_String" and fromType == "iris_str": return false
   # All other type pairs — allow (full type system will catch later)
   return true
 
@@ -353,7 +345,7 @@ proc formatParams*(g: CodeGen, params: seq[Param]): string =
 proc inferCType(g: CodeGen, e: Expr): string
 
 proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
-  if e of StringLitExpr or e of StringInterpExpr: return ("%s", false)
+  if e of StringLitExpr: return ("%s", false)
   if e of FloatLitExpr: return ("%g", false)
   if e of BoolLitExpr: return ("%s", false)
   if e of DollarExpr: return ("%s", false)
@@ -361,7 +353,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
     let ct = g.varCType(IdentExpr(e).name)
     case ct
     of "const char*": return ("%s", false)
-    of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
+    of "iris_str", "iris_String": return ("%.*s", false)
     of "bool": return ("%s", false)
     of "double", "float": return ("%g", false)
     else: return ("%lld", true)
@@ -377,13 +369,13 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
             case f.ctype
             of "double", "float": return ("%g", false)
             of "const char*": return ("%s", false)
-            of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
+            of "iris_str", "iris_String": return ("%.*s", false)
             of "bool": return ("%s", false)
             else: return ("%lld", true)
   # Fallback — use inferCType for any expression (including CallExpr)
   let ct = g.inferCType(e)
   case ct
-  of "iris_str", "iris_view_String", "iris_String": return ("%.*s", false)
+  of "iris_str", "iris_String": return ("%.*s", false)
   of "bool": return ("%s", false)
   of "double", "float": return ("%g", false)
   else: return ("%lld", true)
@@ -391,7 +383,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
 proc inferCType(g: CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
-  if e of StringLitExpr or e of StringInterpExpr: return "iris_str"
+  if e of StringLitExpr: return "iris_str"
   if e of StrLitExpr or e of StrInterpExpr: return "iris_String"
   if e of ArrayLitExpr:
     let a = ArrayLitExpr(e)
@@ -511,7 +503,7 @@ proc ensureArrayType(g: var CodeGen, elemType, size: string) =
 
 proc hashFuncFor(ctype: string): string =
   case ctype
-  of "iris_str", "iris_view_String": "iris_hash_str"
+  of "iris_str": "iris_hash_str"
   of "iris_String": "iris_hash_str"  # String has same data/len layout
   of "int64_t", "int32_t", "int16_t", "int8_t",
      "uint64_t", "uint32_t", "uint16_t", "uint8_t": "iris_hash_int"
@@ -521,7 +513,7 @@ proc hashFuncFor(ctype: string): string =
 
 proc eqFuncFor(ctype: string): string =
   case ctype
-  of "iris_str", "iris_view_String": "iris_eq_str"
+  of "iris_str": "iris_eq_str"
   of "iris_String": "iris_eq_str"
   of "double", "float": "iris_eq_double"
   else: "iris_eq_int"
@@ -533,7 +525,7 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   let hashFn = hashFuncFor(keyType)
   let eqFn = eqFuncFor(keyType)
   # For str keys, we need to cast to iris_str for hashing
-  let keyIsStr = keyType in ["iris_str", "iris_view_String", "iris_String"]
+  let keyIsStr = keyType in ["iris_str", "iris_String"]
   let hashCall = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[i])"
                  else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")s->keys[i])"
   let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
@@ -623,7 +615,7 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   g.emittedSeqTypes.add(hsType)
   let hashFn = hashFuncFor(elemType)
   let eqFn = eqFuncFor(elemType)
-  let keyIsStr = elemType in ["iris_str", "iris_view_String", "iris_String"]
+  let keyIsStr = elemType in ["iris_str", "iris_String"]
   let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
                   else: hashFn & "((" & (if elemType == "double": "double" else: "int64_t") & ")key)"
   let eqCall = if keyIsStr: eqFn & "(*(iris_str*)&s->keys[i], *(iris_str*)&key)"
@@ -783,7 +775,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
     let name = IdentExpr(e).name
     let ct = g.varCType(name)
     if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-    elif ct in ["iris_str", "iris_view_String", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
+    elif ct in ["iris_str", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
     else: g.genExpr(e)
   elif e of DollarExpr:
     let inner = DollarExpr(e).expr
@@ -791,7 +783,7 @@ proc genEchoArg(g: var CodeGen, e: Expr) =
       let name = IdentExpr(inner).name
       let ct = g.varCType(name)
       if ct == "bool": g.emit("(" & name & " ? \"true\" : \"false\")")
-      elif ct in ["iris_str", "iris_view_String", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
+      elif ct in ["iris_str", "iris_String"]: g.emit("(int)" & name & ".len, " & name & ".data")
       elif ct == "const char*": g.emit(name)
       else:
         for en in g.enumNames:
@@ -839,7 +831,7 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     let ct = g.inferCType(e)
     # Non-trivial expression returning string — use temp variable
     # (IdentExpr is handled in genEchoArg, literals handled above)
-    if ct in ["iris_str", "iris_view_String", "iris_String"] and not (e of IdentExpr):
+    if ct in ["iris_str", "iris_String"] and not (e of IdentExpr):
       g.emit("{ " & ct & " iris_echo_tmp = ")
       g.genExpr(e)
       g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data); }")
@@ -854,7 +846,7 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
         g.emit("printf(\"%g\", " & name & ".data[iris_i]); ")
       of "bool":
         g.emit("printf(\"%s\", " & name & ".data[iris_i] ? \"true\" : \"false\"); ")
-      of "iris_str", "iris_view_String", "iris_String":
+      of "iris_str", "iris_String":
         g.emit("printf(\"%.*s\", (int)" & name & ".data[iris_i].len, " & name & ".data[iris_i].data); ")
       else:
         g.emit("printf(\"%lld\", (long long)" & name & ".data[iris_i]); ")
@@ -870,7 +862,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
   if e of IntLitExpr: g.emit($IntLitExpr(e).val)
   elif e of FloatLitExpr: g.emit($FloatLitExpr(e).val)
   elif e of StringLitExpr:
-    g.emit("iris_view_String_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
+    g.emit("iris_str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
   elif e of StrLitExpr:
     g.emit("iris_String_from(\"" & escapeC(StrLitExpr(e).val) & "\")")
   elif e of StrInterpExpr:

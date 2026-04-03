@@ -12,18 +12,13 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-/* ── view[String] — immutable view (pointer + length) ── */
+/* ── str — static string reference (pointer + length, points to .rodata) ── */
 
-typedef struct { const char* data; size_t len; } iris_view_String;
+typedef struct { const char* data; size_t len; } iris_str;
 
-static inline iris_view_String iris_view_String_from(const char* s) {
-  return (iris_view_String){s, strlen(s)};
+static inline iris_str iris_str_from(const char* s) {
+  return (iris_str){s, strlen(s)};
 }
-
-/* ── str — static string reference (same layout as view[String]) ── */
-
-typedef iris_view_String iris_str;
-#define iris_str_from iris_view_String_from
 
 /* ── String — owned heap buffer (pointer + length + capacity) ── */
 
@@ -40,7 +35,7 @@ static inline iris_String iris_String_from(const char* s) {
   return (iris_String){data, len, len};
 }
 
-static inline iris_String iris_String_from_view(iris_view_String v) {
+static inline iris_String iris_String_from_str(iris_str v) {
   char* data = (char*)malloc(v.len + 1);
   memcpy(data, v.data, v.len);
   data[v.len] = '\0';
