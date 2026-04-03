@@ -43,6 +43,8 @@ type
     fnOwnParams*: Table[string, seq[int]]  # func name -> indices of own params
     fnParamMods*: Table[string, seq[ParamModifier]]  # func name -> param modifiers
     refVars*: HashSet[string]  # variables that are pointers (mut params)
+    loopScopeStack*: seq[int]  # stack of scope depths for unlabeled break/continue
+    labeledLoopScopes*: Table[string, int]  # label → scope depth for labeled break/continue
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -245,6 +247,18 @@ proc emitScopeCleanup(g: var CodeGen) =
       let stmt = g.freeExprStr(name, ct)
       if stmt.len > 0:
         g.emitLine(stmt)
+
+proc emitCleanupToDepth(g: var CodeGen, targetDepth: int) =
+  ## Emit cleanup for all scopes from current down to targetDepth (inclusive)
+  for si in countdown(g.scopeVars.len - 1, targetDepth):
+    for vi in countdown(g.scopeVars[si].len - 1, 0):
+      let name = g.scopeVars[si][vi]
+      if name in g.movedVars: continue
+      let ct = g.varCType(name)
+      if g.needsFree(ct):
+        let stmt = g.freeExprStr(name, ct)
+        if stmt.len > 0:
+          g.emitLine(stmt)
 
 proc popScope(g: var CodeGen) =
   if g.scopeVars.len > 0:
@@ -1726,6 +1740,14 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of AssignStmt:
     let a = AssignStmt(s)
+    # Free old value before reassignment for heap types
+    if a.target of IdentExpr:
+      let name = IdentExpr(a.target).name
+      let ct = g.varCType(name)
+      if g.needsFree(ct):
+        let stmt = g.freeExprStr(name, ct)
+        if stmt.len > 0:
+          g.emitLine(stmt)
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
 
   elif s of ResultAssignStmt:
@@ -1897,9 +1919,14 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.emitIndent(); g.emit("while ("); g.genCondExpr(w.condition); g.emit(") {\n")
     g.indent += 1
     g.pushScope()
+    let loopDepth = g.scopeVars.len - 1
+    g.loopScopeStack.add(loopDepth)
+    if w.label.len > 0: g.labeledLoopScopes[w.label] = loopDepth
     for st in w.body: g.genStmt(st)
     g.emitScopeCleanup()
     g.popScope()
+    g.loopScopeStack.setLen(g.loopScopeStack.len - 1)
+    if w.label.len > 0: g.labeledLoopScopes.del(w.label)
     g.indent -= 1
     g.emitLine("}")
     if w.label.len > 0: g.emitLine(w.label & "_end: ;")
@@ -1941,25 +1968,39 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     # Emit body with scope cleanup (same for all iterator types)
     g.indent += 1
     g.pushScope()
+    let loopDepth = g.scopeVars.len - 1
+    g.loopScopeStack.add(loopDepth)
+    if f.label.len > 0: g.labeledLoopScopes[f.label] = loopDepth
     if preBody.len > 0: g.emitLine(preBody)
     for st in f.body: g.genStmt(st)
     g.emitScopeCleanup()
     g.popScope()
+    g.loopScopeStack.setLen(g.loopScopeStack.len - 1)
+    if f.label.len > 0: g.labeledLoopScopes.del(f.label)
     g.indent -= 1
     g.emitLine("}")
     if f.label.len > 0: g.emitLine(f.label & "_end: ;")
 
   elif s of BreakStmt:
     let b = BreakStmt(s)
+    # Clean all scopes from current down to (and including) the target loop scope
+    let targetDepth = if b.label.len > 0: g.labeledLoopScopes[b.label]
+                      else: g.loopScopeStack[^1]
+    g.emitCleanupToDepth(targetDepth)
     if b.label.len > 0: g.emitLine("goto " & b.label & "_end;")
     else: g.emitLine("break;")
 
   elif s of ContinueStmt:
     let c = ContinueStmt(s)
+    # Clean all scopes from current down to (and including) the loop scope
+    let targetDepth = if c.label.len > 0: g.labeledLoopScopes[c.label]
+                      else: g.loopScopeStack[^1]
+    g.emitCleanupToDepth(targetDepth)
     if c.label.len > 0: g.emitLine("goto " & c.label & "_start;")
     else: g.emitLine("continue;")
 
   elif s of ReturnStmt:
+    g.emitCleanupToDepth(0)
     g.emitLine("return iris_result;")
 
   elif s of ExprStmt:
@@ -2251,16 +2292,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of QuitStmt:
     let q = QuitStmt(s)
-    # Clean up all scope vars before exit
-    for si in countdown(g.scopeVars.len - 1, 0):
-      for vi in countdown(g.scopeVars[si].len - 1, 0):
-        let name = g.scopeVars[si][vi]
-        if name in g.movedVars: continue
-        let ct = g.varCType(name)
-        if g.needsFree(ct):
-          let stmt = g.freeExprStr(name, ct)
-          if stmt.len > 0:
-            g.emitLine(stmt)
+    g.emitCleanupToDepth(0)
     g.emitIndent()
     if q.expr != nil:
       g.emit("exit("); g.genExpr(q.expr); g.emit(");\n")

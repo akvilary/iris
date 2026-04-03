@@ -1,0 +1,5 @@
+# EXPECT C: iris_String_free(&s->keys[i]);
+# EXPECT C: iris_HT_iris_String__int64_t_free(&scores);
+# HashTable with String keys must free keys recursively
+@scores = ~{~"alice": 100, ~"bob": 85}
+*echo("done")

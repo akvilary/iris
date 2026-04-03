@@ -1,0 +1,11 @@
+# EXPECT C: iris_String_free(&s);
+# EXPECT C: return iris_result;
+# early return must free heap vars before returning
+@check! func(@x int) ok int:
+  @s = ~"temp"
+  if x < 0:
+    result = 0
+    return
+  result = x
+
+*echo(check(5))

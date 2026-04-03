@@ -1,0 +1,6 @@
+# EXPECT C: iris_String_free(&s);
+# EXPECT C: exit(0);
+# quit() must free all heap vars before exit
+@s = ~"hello"
+if true:
+  quit()

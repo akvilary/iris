@@ -1,0 +1,6 @@
+# EXPECT C: iris_String_free(&s);
+# EXPECT C: }
+# heap vars inside loop body must be freed each iteration
+for @i in 0..<3:
+  @s = ~"hello"
+  *echo(s)

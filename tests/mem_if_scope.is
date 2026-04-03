@@ -1,0 +1,9 @@
+# EXPECT C: iris_String_free(&s);
+# heap vars inside if/else branches must be freed at branch exit
+@x = 5
+if x > 3:
+  @s = ~"big"
+  *echo(s)
+else:
+  @s = ~"small"
+  *echo(s)

@@ -1,0 +1,8 @@
+# EXPECT C: iris_String_free(&s);
+# EXPECT C: continue;
+# continue must free heap vars before restarting iteration
+for @i in 0..<10:
+  @s = ~"hello"
+  if i == 3:
+    continue
+  *echo(s)

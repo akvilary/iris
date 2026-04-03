@@ -1,0 +1,14 @@
+# EXPECT C: divide_Result_free(&r);
+# EXPECT C: DivError_free(&self->DivError_err);
+# Result type with error containing String must be freed
+@DivError! error:
+  @message! String
+
+@divide! func(@a int, @b int) ok int else DivError:
+  if b == 0:
+    result = DivError(message=~"division by zero")
+    return
+  result = a / b
+
+@r = divide(10, 0)
+*echo("done")

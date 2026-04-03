@@ -1,0 +1,11 @@
+# EXPECT C: iris_String_free(&s2);
+# EXPECT C: iris_String_free(&s1);
+# EXPECT C: goto outer_end;
+# labeled break must free all scopes up to labeled loop
+@outer while true:
+  @s1 = ~"outer"
+  for @i in 0..<5:
+    @s2 = ~"inner"
+    if i == 2:
+      break outer
+    *echo(s2)

@@ -1,0 +1,9 @@
+# EXPECT ERROR: cannot move field out of struct
+# cannot move a field out of a struct (would cause double-free)
+@User! object:
+  @name! String
+  @age! int
+
+@get! func() ok str:
+  @u = User(name=~"Alice", age=30)
+  result = u.name

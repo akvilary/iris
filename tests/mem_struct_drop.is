@@ -1,0 +1,9 @@
+# EXPECT C: User_free(&u);
+# EXPECT C: iris_String_free(&self->name);
+# struct with String field must generate recursive _free
+@User! object:
+  @name! String
+  @age! int
+
+@u = User(name=~"Alice", age=30)
+*echo(u.age)

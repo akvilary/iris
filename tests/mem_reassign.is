@@ -1,0 +1,6 @@
+# EXPECT C: iris_String_free(&s);
+# EXPECT C: s = iris_String_from("world");
+# reassignment must free old value before assigning new
+@s mut = ~"hello"
+s = ~"world"
+*echo(s)
