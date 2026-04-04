@@ -1,0 +1,11 @@
+# EXPECT ERROR: cannot return reference to local variable
+# result = variable without mv is an error
+@User object:
+  @name String
+
+@makeUser func() ok User:
+  @u = User(name=~"Alice")
+  result = u
+
+@x = makeUser()
+*echo(x.name)

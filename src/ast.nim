@@ -217,10 +217,12 @@ type
     modifier*: DeclModifier
     typeAnn*: TypeExpr  # nil = inferred
     value*: Expr
+    isMv*: bool  # mv — ownership transfer
 
   AssignStmt* = ref object of Stmt
     target*: Expr
     value*: Expr
+    isMv*: bool  # mv — ownership transfer
 
   CompoundAssignStmt* = ref object of Stmt
     target*: Expr
@@ -230,6 +232,7 @@ type
   ResultAssignStmt* = ref object of Stmt
     field*: string  # empty = whole result, non-empty = result.field
     value*: Expr
+    isMv*: bool  # mv — ownership transfer
 
   Param* = object
     name*: string

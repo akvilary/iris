@@ -669,24 +669,40 @@ proc parseDestructDecl(P: var Parser): Stmt =
 
 # ── Statement parsing ──
 
+proc peekNext(P: Parser): TokenKind =
+  if P.pos + 1 < P.tokens.len: P.tokens[P.pos + 1].kind else: tkEof
+
+proc parseMvExpr(P: var Parser): (Expr, bool) =
+  ## Parse expression, checking for leading `mv` keyword.
+  ## Returns (expr, isMv).
+  ## Note: `mv func(...)` is a mv-capture lambda — don't consume mv here.
+  if P.at(tkMv) and P.peekNext() != tkFunc:
+    discard P.advance()
+    (P.parseExpr(), true)
+  else:
+    (P.parseExpr(), false)
+
 proc parseDecl(P: var Parser): Stmt =
   let at = P.parseAtName()
   case P.peek()
   of tkEq:
     discard P.advance()
-    DeclStmt(name: at.name, public: at.public, modifier: declDefault, value: P.parseExpr())
+    let (value, isMv) = P.parseMvExpr()
+    DeclStmt(name: at.name, public: at.public, modifier: declDefault, value: value, isMv: isMv)
   of tkMut:
     discard P.advance()
     if P.at(tkEq):
       # @name mut = value
       discard P.advance()
-      DeclStmt(name: at.name, public: at.public, modifier: declMut, value: P.parseExpr())
+      let (value, isMv) = P.parseMvExpr()
+      DeclStmt(name: at.name, public: at.public, modifier: declMut, value: value, isMv: isMv)
     else:
       # @name mut Type [= value]
       let typeAnn = P.parseType()
       if P.at(tkEq):
         discard P.advance()
-        DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn, value: P.parseExpr())
+        let (value, isMv) = P.parseMvExpr()
+        DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn, value: value, isMv: isMv)
       else:
         DeclStmt(name: at.name, public: at.public, modifier: declMut, typeAnn: typeAnn)
   of tkConst:
@@ -705,7 +721,8 @@ proc parseDecl(P: var Parser): Stmt =
     let typeAnn = P.parseType()
     if P.at(tkEq):
       discard P.advance()
-      DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
+      let (value, isMv) = P.parseMvExpr()
+      DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: value, isMv: isMv)
     else:
       DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn)
   of tkMv:
@@ -1086,10 +1103,12 @@ proc parseStmt*(P: var Parser): Stmt =
       discard P.advance()
       let field = P.parseIdentName()
       P.expect(tkEq)
-      result = ResultAssignStmt(field: field, value: P.parseExpr())
+      let (value, isMv) = P.parseMvExpr()
+      result = ResultAssignStmt(field: field, value: value, isMv: isMv)
     else:
       P.expect(tkEq)
-      result = ResultAssignStmt(value: P.parseExpr())
+      let (value, isMv) = P.parseMvExpr()
+      result = ResultAssignStmt(value: value, isMv: isMv)
   of tkBlock:
     discard P.advance()
     P.expect(tkColon); P.skipNewlines()
@@ -1154,7 +1173,8 @@ proc parseStmt*(P: var Parser): Stmt =
     let expr = P.parseExpr()
     if P.at(tkEq):
       discard P.advance()
-      result = AssignStmt(target: expr, value: P.parseExpr())
+      let (value, isMv) = P.parseMvExpr()
+      result = AssignStmt(target: expr, value: value, isMv: isMv)
     elif P.at(tkPlusEq):
       discard P.advance()
       result = CompoundAssignStmt(target: expr, op: opAdd, value: P.parseExpr())

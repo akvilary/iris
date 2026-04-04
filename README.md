@@ -33,9 +33,16 @@ Three levels of mutability — nothing more:
 @host = "localhost"       # immutable
 @port mut = 8080          # mutable
 @maxRetries const = 3     # compile-time constant
+
+# Assignment from variable = reference (not copy):
+@user = User(name=~"Alice")    # ownership — rvalue
+@ref = user                    # immutable reference to user
+@mref mut = user               # mutable reference (exclusive)
+@moved = mv user               # ownership transfer — user now invalid
 ```
 
 No zero-initialization. The compiler verifies every variable is assigned before use.
+Assignment from a variable creates a reference. Borrowing rule: either N immutable refs or 1 mutable ref — not both. No lifetime annotations — compiler checks by scope.
 
 ### Functions and named arguments
 
@@ -275,7 +282,7 @@ Hygienic macros written in Iris itself, called with `*` prefix:
 
 | Principle | How Iris applies it |
 |---|---|
-| **Explicit over implicit** | `~` marks every heap allocation. `mut` marks every mutable variable. Errors are in the signature. |
+| **Explicit over implicit** | `~` marks every heap allocation. `mut` marks every mutable variable. `mv` marks every ownership transfer. Errors are in the signature. |
 | **No zero-initialization** | Compiler checks assigned-before-use — no hidden defaults, no "zero value" bugs. |
 | **One way to do it** | One loop syntax. One match syntax. One heap marker. |
 | **Safety without annotations** | Lifetime inference uses 3 simple rules — no `'a` annotations needed for 90%+ of code. |

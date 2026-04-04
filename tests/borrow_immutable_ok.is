@@ -1,0 +1,9 @@
+# EXPECT RUN: Alice
+# Multiple immutable refs are OK
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@a = user
+@b = user
+*echo(a.name)

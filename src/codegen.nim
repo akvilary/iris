@@ -1760,12 +1760,18 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           g.emit(ctype & " " & d.name & " = ")
         g.emit(exprCode)
         g.emit(";\n")
-    # Track move: @t = s where s is heap → mark s as moved
+    # Track move or reference
     if d.value != nil and d.value of IdentExpr:
       let srcName = IdentExpr(d.value).name
-      let srcType = g.varCType(srcName)
-      if g.needsFree(srcType) and srcName notin g.movedVars:
-        g.movedVars.add(srcName)
+      if d.isMv:
+        # mv — ownership transfer: mark source as moved
+        let srcType = g.varCType(srcName)
+        if g.needsFree(srcType) and srcName notin g.movedVars:
+          g.movedVars.add(srcName)
+      else:
+        # Reference — don't free this var (it doesn't own the data)
+        if g.needsFree(ctype) and d.name notin g.movedVars:
+          g.movedVars.add(d.name)
 
   elif s of DestructDeclStmt:
     let dd = DestructDeclStmt(s)
@@ -1885,6 +1891,11 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         if stmt.len > 0:
           g.emitLine(stmt)
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
+    # Track mv on reassignment
+    if a.isMv and a.value of IdentExpr:
+      let srcName = IdentExpr(a.value).name
+      if srcName notin g.movedVars:
+        g.movedVars.add(srcName)
 
   elif s of ResultAssignStmt:
     let rs = ResultAssignStmt(s)
@@ -1920,11 +1931,11 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     else:
       g.emit("iris_result = ")
     g.emit(exprCode); g.emit(";\n")
-    # Track moved variable (ownership transfer to result)
-    if val of IdentExpr:
+    # Track moved variable (ownership transfer to result) — only with mv
+    if rs.isMv and val of IdentExpr:
       let varName = IdentExpr(val).name
       let ct = g.varCType(varName)
-      if ct.isHeapType() and varName notin g.movedVars:
+      if g.needsFree(ct) and varName notin g.movedVars:
         g.movedVars.add(varName)
 
   elif s of FnDeclStmt:

@@ -1,0 +1,8 @@
+# EXPECT ERROR: cannot create second mutable reference
+# Two mutable refs to same source is an error
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@a mut = user
+@b mut = user

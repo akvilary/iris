@@ -1,0 +1,8 @@
+# EXPECT ERROR: used after move
+# mv makes source invalid
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@moved = mv user
+*echo(user.name)

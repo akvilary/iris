@@ -1,0 +1,8 @@
+# EXPECT ERROR: cannot create mutable reference
+# Mutable ref while immutable refs exist is an error
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@a = user
+@m mut = user

@@ -17,6 +17,9 @@ type
     modifier: DeclModifier
     typeAnn: TypeExpr
     isHeap: bool  # true for String, Seq, HashTable, HashSet
+    isRef: bool       # true if this variable is a reference to another
+    isMutRef: bool    # true if this is a mutable reference
+    refSource: string # name of the source variable (if isRef)
 
   Scope = object
     vars: Table[string, VarInfo]
@@ -28,6 +31,8 @@ type
     knownTypes: HashSet[string]
     fnParams: HashSet[string]  # current function's parameter names (always initialized)
     movedVars: HashSet[string] # variables moved via result = x
+    immBorrows: Table[string, int]    # source var -> count of immutable refs
+    mutBorrow: Table[string, string]  # source var -> name of mutable ref holder
     fnParamMods: Table[string, seq[ParamModifier]]  # func name -> param modifiers
     currentFnReturnsBorrow: bool  # true if current function returns view/str
     currentFnReturnType: TypeExpr  # current function's return type
@@ -53,10 +58,20 @@ proc pushScope(ctx: var SemaContext) =
 
 proc popScope(ctx: var SemaContext) =
   if ctx.scopes.len > 0:
-    # Remove scope-local vars from initVars
+    # Remove scope-local vars from initVars and clean up borrow tracking
     let top = ctx.scopes[^1]
-    for name in top.vars.keys:
+    for name, info in top.vars.pairs:
       ctx.initVars.excl(name)
+      # If this var was a ref, decrement borrow count
+      if info.isRef and info.refSource.len > 0:
+        if info.isMutRef:
+          ctx.mutBorrow.del(info.refSource)
+        else:
+          let count = ctx.immBorrows.getOrDefault(info.refSource, 0)
+          if count <= 1:
+            ctx.immBorrows.del(info.refSource)
+          else:
+            ctx.immBorrows[info.refSource] = count - 1
     ctx.scopes.setLen(ctx.scopes.len - 1)
 
 proc declareVar(ctx: var SemaContext, name: string, info: VarInfo) =
@@ -403,25 +418,53 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     var heap = isHeapTypeAnn(d.typeAnn) or (d.value != nil and isHeapExpr(d.value))
     # Partial move check: cannot move a field/element out of a struct/collection
     if d.value != nil and isPartialMove(d.value):
-      # Check if the source object is heap-owning
       if d.value of FieldAccessExpr and FieldAccessExpr(d.value).expr of IdentExpr:
         let srcName = IdentExpr(FieldAccessExpr(d.value).expr).name
         let srcInfo = ctx.lookupVarInfo(srcName)
         if srcInfo.isHeap:
           ctx.error("error: cannot move field out of struct — move the whole value or copy it")
-    # If assigning from another heap variable — it's a move
+    # Reference and move tracking for lvalue assignments
+    var isRef = false
+    var isMutRef = false
+    var refSource = ""
     if d.value != nil and d.value of IdentExpr:
       let srcName = IdentExpr(d.value).name
       let srcInfo = ctx.lookupVarInfo(srcName)
-      if srcInfo.isHeap:
-        heap = true
+      if d.isMv:
+        # mv — ownership transfer, source becomes invalid
+        heap = heap or srcInfo.isHeap
         ctx.movedVars.incl(srcName)
+        # If source was a mut ref, also invalidate the original
+        if srcInfo.isRef and srcInfo.refSource.len > 0:
+          ctx.movedVars.incl(srcInfo.refSource)
+      else:
+        # No mv — this is a reference (borrow)
+        # Resolve the ultimate source (if srcName is itself a ref, follow the chain)
+        let ultimateSrc = if srcInfo.isRef and srcInfo.refSource.len > 0: srcInfo.refSource else: srcName
+        isRef = true
+        refSource = ultimateSrc
+        if d.modifier == declMut:
+          # Mutable ref — check exclusivity
+          isMutRef = true
+          if ultimateSrc in ctx.mutBorrow:
+            ctx.error("error: cannot create second mutable reference to '" & ultimateSrc & "'")
+          elif ctx.immBorrows.getOrDefault(ultimateSrc, 0) > 0:
+            ctx.error("error: cannot create mutable reference to '" & ultimateSrc & "' — immutable references exist")
+          else:
+            ctx.mutBorrow[ultimateSrc] = d.name
+        else:
+          # Immutable ref — check no mut ref exists
+          if ultimateSrc in ctx.mutBorrow:
+            ctx.error("error: cannot borrow '" & ultimateSrc & "' — mutable reference exists (held by '" & ctx.mutBorrow[ultimateSrc] & "')")
+          else:
+            ctx.immBorrows[ultimateSrc] = ctx.immBorrows.getOrDefault(ultimateSrc, 0) + 1
     # Infer type if not explicitly annotated
     let resolvedType = if d.typeAnn != nil: d.typeAnn
                        elif d.value != nil: ctx.inferType(d.value)
                        else: nil
     # Declare the variable
-    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: resolvedType, isHeap: heap))
+    ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: resolvedType,
+                                   isHeap: heap, isRef: isRef, isMutRef: isMutRef, refSource: refSource))
     # Mark initialized if it has a value
     if d.value != nil:
       ctx.markInitialized(d.name)
@@ -444,6 +487,13 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
   elif s of AssignStmt:
     let a = AssignStmt(s)
     ctx.analyzeExpr(a.value)
+    # mv tracking for reassignment
+    if a.isMv and a.value of IdentExpr:
+      let srcName = IdentExpr(a.value).name
+      ctx.movedVars.incl(srcName)
+      let srcInfo = ctx.lookupVarInfo(srcName)
+      if srcInfo.isRef and srcInfo.refSource.len > 0:
+        ctx.movedVars.incl(srcInfo.refSource)
     # Mark target as initialized
     if a.target of IdentExpr:
       ctx.markInitialized(IdentExpr(a.target).name)
@@ -475,9 +525,18 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
           else:
             ctx.error("error: cannot return '" & srcName &
               "' — it is a view of local data that will be freed")
-    # Mark variable as moved (ownership transfer)
+    # result = variable requires mv (cannot return reference to local)
     if rs.value of IdentExpr:
-      ctx.movedVars.incl(IdentExpr(rs.value).name)
+      let srcName = IdentExpr(rs.value).name
+      if srcName != "result":
+        if rs.isMv:
+          ctx.movedVars.incl(srcName)
+          # If source was a ref, also invalidate the original
+          let srcInfo = ctx.lookupVarInfo(srcName)
+          if srcInfo.isRef and srcInfo.refSource.len > 0:
+            ctx.movedVars.incl(srcInfo.refSource)
+        else:
+          ctx.error("error: cannot return reference to local variable '" & srcName & "' — use 'result = mv " & srcName & "'")
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
@@ -779,6 +838,8 @@ proc analyze*(stmts: seq[Stmt], filename: string = ""): seq[string] =
     knownTypes: initHashSet[string](),
     fnParams: initHashSet[string](),
     movedVars: initHashSet[string](),
+    immBorrows: initTable[string, int](),
+    mutBorrow: initTable[string, string](),
     fnParamMods: initTable[string, seq[ParamModifier]](),
     filename: filename,
   )

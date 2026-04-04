@@ -221,6 +221,75 @@ All declarations start with `@`. Immutable by default.
 counter = counter + 1              # OK
 ```
 
+### Assignment semantics
+
+Assignment from an **rvalue** (literal, constructor, function call) creates ownership.
+Assignment from an **lvalue** (another variable) creates a **reference**:
+
+| Expression | What happens |
+|------------|-------------|
+| `@x = User()` | x owns the value (rvalue → ownership) |
+| `@x = someFunc()` | x owns the result (rvalue → ownership) |
+| `@x = 42` | x owns the value (literal → ownership) |
+| `@y = x` | y is an immutable reference to x (lvalue → ref) |
+| `@y mut = x` | y is a mutable reference to x (lvalue → mut ref) |
+| `@y = mv x` | y takes ownership, x becomes invalid (move) |
+| `@y mut = mv x` | y takes ownership (mutable), x becomes invalid (move) |
+| `@y = x.copy()` | y owns a copy (rvalue → ownership) |
+
+```
+@user = User(name=~"Alice")    # ownership — rvalue
+@ref = user                    # immutable reference to user
+@mref mut = user               # mutable reference to user
+@moved = mv user               # ownership transferred, user is now invalid
+```
+
+This is consistent with function parameters, where immutable reference is the default.
+
+#### Borrowing rules
+
+Either N immutable refs **or** 1 mutable ref — not both at the same time.
+Same rule as Rust, but no lifetime annotations — compiler checks by scope.
+
+| Rule | Example |
+|------|---------|
+| Multiple immutable refs OK | `@a = x; @b = x; @c = x` — all valid |
+| One mutable ref, exclusive | `@m mut = x` — only if no other refs to x exist |
+| Immutable refs block mut | `@a = x; @m mut = x` — **compile error** |
+| Mut ref blocks other refs | `@m mut = x; @a = x` — **compile error** |
+| Ref cannot outlive source | `@y = x` where x dies before y — compile error |
+| Cannot return ref to local | `result = x` — error, use `result = mv x` |
+
+```
+@user = User(name=~"Alice")
+
+# Multiple immutable refs — OK:
+@a = user
+@b = user
+
+# Mutable ref — exclusive:
+@user2 = User(name=~"Bob")
+@m mut = user2                  # OK — sole reference
+# @n = user2                    # ERROR: cannot borrow while mutable ref exists
+# @k mut = user2                # ERROR: second mutable ref
+
+# Move through mut ref — invalidates both:
+@n = mv m                       # value moved: m and user2 both invalid
+# *echo(m)                      # ERROR: used after move
+# *echo(user2)                  # ERROR: used after move (moved through m)
+
+# Direct move:
+@user3 = User(name=~"Charlie")
+@owned = mv user3               # OK — user3 is now invalid
+# *echo(user3)                  # ERROR: used after move
+
+# Ref cannot outlive source:
+@outer User
+if true:
+  @inner = User(name=~"Temp")
+  outer = inner                 # ERROR: inner dies at end of block
+```
+
 ## Declarations
 
 All named declarations use `@` prefix. `!` after the name means public.
@@ -369,7 +438,7 @@ Return value is set explicitly:
 
 @findUser! func(@id int) ok User else NotFoundError:
   @user = db.query(id)?
-  result = user
+  result = mv user
 
 # result can be set anywhere, including branches:
 @classify! func(@n int) ok String:
@@ -400,24 +469,29 @@ Compiler verifies that `result` is set on all execution paths.
 
 #### `result` and ownership
 
-`result =` is a **move**, not a copy. For heap types (`String`, `Seq`, `HashTable`),
-ownership transfers to the caller — the source variable becomes invalid:
+`result` cannot hold a reference to a local variable — it must own the value.
+Use `mv` to move a local variable into `result`, or assign an rvalue directly:
 
 ```
 @makeNums func() ok Seq[int]:
   @nums mut = ~[1, 2, 3]
   nums.add(4)
-  result = nums              # ownership moves to result, nums is now invalid
+  result = mv nums            # ownership moves to result, nums is now invalid
                               # nums is NOT freed — caller owns the data
 
 @makeDirect func() ok Seq[int]:
-  result = ~[1, 2, 3]        # literal created directly in result, no intermediate
+  result = ~[1, 2, 3]        # rvalue — ownership, no intermediate
 
 @process func() ok Seq[int]:
   @temp mut = ~[10, 20]
   @other mut = ~[30, 40]     # other is NOT moved to result
-  result = temp               # temp moved to result
+  result = mv temp            # temp moved to result
                               # other freed at scope end (not moved)
+
+@broken func() ok User:
+  @u = User(name=~"Alice")
+  result = u                  # ERROR: cannot return reference to local variable
+                              # use: result = mv u
 ```
 
 At function exit:
@@ -553,10 +627,18 @@ No `&` in the language — the compiler handles it.
   channel.push(msg)
 ```
 
-The borrow checker ensures:
-- Immutable refs: multiple allowed simultaneously
-- Mutable ref: only one at a time, no other refs
-- Ownership: value moved, caller loses access
+Same borrowing rules apply at call sites:
+- Immutable params: multiple allowed simultaneously
+- Mutable param: only one at a time, no other refs to that variable
+- `mv` param: value moved, caller loses access
+
+#### Variable assignment
+
+Variable assignment follows the same rules as parameter passing:
+- `@y = x` — immutable reference (like `@param Type`)
+- `@y mut = x` — mutable reference (like `@param mut Type`)
+- `@y = mv x` — takes ownership (immutable), x becomes invalid
+- `@y mut = mv x` — takes ownership (mutable), x becomes invalid
 
 `Heap[T]` auto-derefs to `T` — functions accepting `T` also accept
 `Heap[T]` without any changes to the signature (see Heap[T] section).
@@ -565,17 +647,17 @@ The borrow checker ensures:
 
 ```
 @handle func(@request Request) ok Response else Error:
-  @user = db.getUser(request.userId)?
-  @posts = db.getPosts(user.id)?
-  result = newResponse(user, posts)
+  @user = db.getUser(request.userId)?     # ownership — rvalue from func
+  @posts = db.getPosts(user.id)?          # ownership — rvalue from func
+  result = mv newResponse(user, posts)
 # <- user, posts, everything destroyed automatically
 
 @process func():
   @a = "hello"
   @b = "world"
-  @long = longest(a, b)    # compiler knows: a, b, long same scope
-  *echo(long)                # OK
-# <- a, b, long destroyed
+  @long = longest(a, b)    # ref — tied to a and b (lifetime rule 3)
+  *echo(long)                # OK — a, b, long same scope
+# <- a, b destroyed (long is just a ref, no cleanup)
 ```
 
 No lifetime annotations. No manual memory management.
@@ -780,7 +862,7 @@ printTree(root)
   a.neighbors.add(b)
   b.neighbors.add(c)
   c.neighbors.add(a)   # cycle!
-  result = a
+  result = mv a
 
 @traverse func(@node Node):
   *echo(node.name)
@@ -807,7 +889,7 @@ processRoles(roles)
   # but we can clone data from one to another:
   @copy = srcRoot.clone()
   dst.alloc(copy)
-  result = dstRoot
+  result = mv dstRoot
 ```
 
 ## Collections
