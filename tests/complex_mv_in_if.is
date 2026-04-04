@@ -1,0 +1,11 @@
+# EXPECT RUN: 42
+# mv in both if/else branches is safe, value used after
+@x = 42
+@y int
+if true:
+  @z = mv x
+  y = z
+else:
+  @z = mv x
+  y = z
+*echo(y)

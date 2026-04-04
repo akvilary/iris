@@ -1,0 +1,7 @@
+# EXPECT RUN: hello
+# Return owned String via result = mv
+@makeStr func() ok String:
+  @s = ~"hello"
+  result = mv s
+
+*echo(makeStr())

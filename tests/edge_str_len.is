@@ -1,0 +1,4 @@
+# EXPECT RUN: 5
+# String .len access
+@s = "hello"
+*echo(s.len)

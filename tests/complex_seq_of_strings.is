@@ -1,0 +1,5 @@
+# EXPECT RUN: 10
+# Seq of ints, iterate and echo each
+@nums = ~[10, 20, 30]
+for @n in nums:
+  *echo(n)

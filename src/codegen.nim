@@ -1772,6 +1772,17 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         # Reference — don't free this var (it doesn't own the data)
         if g.needsFree(ctype) and d.name notin g.movedVars:
           g.movedVars.add(d.name)
+    # Track moved args for mv params in function calls
+    if d.value != nil and d.value of CallExpr:
+      let call = CallExpr(d.value)
+      if call.fn of IdentExpr:
+        let fnName = IdentExpr(call.fn).name
+        if fnName in g.fnMvParams:
+          for idx in g.fnMvParams[fnName]:
+            if idx < call.args.len and call.args[idx].value of IdentExpr:
+              let argName = IdentExpr(call.args[idx].value).name
+              if argName notin g.movedVars:
+                g.movedVars.add(argName)
 
   elif s of DestructDeclStmt:
     let dd = DestructDeclStmt(s)

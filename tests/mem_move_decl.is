@@ -1,5 +1,5 @@
-# EXPECT C: iris_String_free(&t);
-# @t = s moves ownership — s must NOT be freed (only t)
+# EXPECT C: iris_String_free(&s);
+# @t = s creates reference — only owner s is freed (not t)
 @s = ~"hello"
 @t = s
 *echo(t)

@@ -1,0 +1,6 @@
+# EXPECT RUN: 42
+# Chain of moves: a -> b -> c
+@a = 42
+@b = mv a
+@c = mv b
+*echo(c)

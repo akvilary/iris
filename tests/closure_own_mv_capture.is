@@ -1,0 +1,5 @@
+# EXPECT ERROR: used after move
+# mv func captures owned var, source becomes invalid
+@name = ~"alice"
+@greet = mv func() ok String as name
+*echo(name)

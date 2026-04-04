@@ -1,0 +1,7 @@
+# EXPECT RUN: 6
+# Iterate fixed array and sum
+@arr = [1, 2, 3]
+@total mut = 0
+for @n in arr:
+  total += n
+*echo(total)

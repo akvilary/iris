@@ -1,0 +1,5 @@
+# EXPECT ERROR: used after move
+# Use after move is a compile error
+@x = 42
+@y = mv x
+*echo(x)

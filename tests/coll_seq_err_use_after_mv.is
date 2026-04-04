@@ -1,0 +1,5 @@
+# EXPECT ERROR: used after move
+# Move Seq then use old variable
+@nums = ~[1, 2, 3]
+@moved = mv nums
+*echo(nums.len)

@@ -1,0 +1,4 @@
+# EXPECT RUN: 3
+# Create HashSet, add values, echo len
+@tags mut = ~{1, 2, 3}
+*echo(tags.len)

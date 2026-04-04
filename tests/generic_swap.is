@@ -1,0 +1,13 @@
+# EXPECT OK: generic swap returns tuple
+# Generic swap via tuple return
+@Pair tuple:
+  @x int
+  @y int
+
+@swap func(@a int, @b int) ok Pair:
+  result = Pair(b, a)
+
+@p = swap(1, 2)
+(@x, @y) = p
+*echo(x)
+*echo(y)

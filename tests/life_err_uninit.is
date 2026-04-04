@@ -1,0 +1,6 @@
+# EXPECT ERROR: used before initialization
+# @x int, init only in if (no else), use after is error
+@x int
+if true:
+  x = 1
+*echo(x)

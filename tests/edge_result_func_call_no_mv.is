@@ -1,0 +1,9 @@
+# EXPECT RUN: 7
+# result = function call — rvalue, no mv needed
+@double func(@x int) ok int:
+  result = x * 2
+
+@addOne func(@x int) ok int:
+  result = double(x) + 1
+
+*echo(addOne(3))

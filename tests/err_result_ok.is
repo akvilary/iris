@@ -1,0 +1,14 @@
+# EXPECT RUN: 5
+# Function returns ok value
+@DivError error:
+  @message String
+
+@divide func(@a int, @b int) ok int else DivError:
+  if b == 0:
+    result = DivError(message=~"division by zero")
+    return
+  result = a / b
+
+@r = divide(10, 2)
+if r:
+  *echo(->r)

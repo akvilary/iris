@@ -1,0 +1,8 @@
+# EXPECT RUN: 4
+# Function takes mut Seq param, modifies it via pointer
+@addItem func(@v mut Seq[int]):
+  v.add(99)
+
+@nums mut = ~[1, 2, 3]
+addItem(nums)
+*echo(nums.len)

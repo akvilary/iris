@@ -1,0 +1,6 @@
+# EXPECT ERROR: used after move
+# Move inside loop body — second iteration uses moved var
+@s = ~"hello"
+for @i in 0..<3:
+  @taken = mv s
+  *echo(taken)

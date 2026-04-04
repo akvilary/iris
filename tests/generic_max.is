@@ -1,0 +1,9 @@
+# EXPECT RUN: 10
+# Generic max function with comparison
+@max func[T](@a mv T, @b mv T) ok T:
+  if a > b:
+    result = mv a
+  else:
+    result = mv b
+
+*echo(max(3, 10))

@@ -1,0 +1,6 @@
+# EXPECT RUN: 30
+# result = arithmetic expression — rvalue, no mv needed
+@sum func(@a int, @b int) ok int:
+  result = a + b
+
+*echo(sum(10, 20))

@@ -1,0 +1,11 @@
+# EXPECT RUN: Alice
+# Return owned object via result = mv
+@User object:
+  @name String
+
+@makeUser func() ok User:
+  @u = User(name=~"Alice")
+  result = mv u
+
+@x = makeUser()
+*echo(x.name)

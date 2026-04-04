@@ -1,0 +1,7 @@
+# EXPECT RUN: 60
+# Iterate Seq and sum elements
+@nums = ~[10, 20, 30]
+@total mut = 0
+for @n in nums:
+  total += n
+*echo(total)

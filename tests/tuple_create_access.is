@@ -1,0 +1,8 @@
+# EXPECT RUN: 10
+# Create tuple, access fields
+@Point tuple:
+  @x int
+  @y int
+
+@p = Point(10, 20)
+*echo(p.x)

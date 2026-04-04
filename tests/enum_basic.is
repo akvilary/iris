@@ -1,0 +1,15 @@
+# EXPECT RUN: yes
+# Declare enum, use in case statement
+@Color enum:
+  @Red
+  @Green
+  @Blue
+
+@c = Color.Green
+case c:
+  of Red:
+    *echo("no")
+  of Green:
+    *echo("yes")
+  of Blue:
+    *echo("no")

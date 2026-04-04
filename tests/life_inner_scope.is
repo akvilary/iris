@@ -1,0 +1,7 @@
+# EXPECT RUN: outer
+# Inner scope creates values, outer scope still works after
+@msg = ~"outer"
+if true:
+  @inner = ~"inner"
+  *echo(inner)
+*echo(msg)

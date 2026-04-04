@@ -1,0 +1,8 @@
+# EXPECT RUN: 10
+# Mutable counter summing in while loop
+@i mut = 0
+@sum mut = 0
+while i < 4:
+  i += 1
+  sum += i
+*echo(sum)

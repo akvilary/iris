@@ -1,0 +1,11 @@
+# EXPECT RUN: Alice
+# Object with object field, create and access nested field
+@Address object:
+  @city String
+
+@Person object:
+  @name String
+  @addr Address
+
+@p = Person(name=~"Alice", addr=Address(city=~"NYC"))
+*echo(p.name)

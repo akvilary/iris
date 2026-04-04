@@ -1,0 +1,7 @@
+# EXPECT RUN: 42
+# Return owned int via result = mv
+@makeNum func() ok int:
+  @x = 42
+  result = mv x
+
+*echo(makeNum())

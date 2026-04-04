@@ -1,0 +1,6 @@
+# EXPECT RUN: 5
+# Basic while loop with counter
+@i mut = 0
+while i < 5:
+  i += 1
+*echo(i)

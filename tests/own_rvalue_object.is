@@ -1,0 +1,7 @@
+# EXPECT RUN: Alice
+# Ownership of a custom object
+@Item object:
+  @name String
+
+@item = Item(name=~"Alice")
+*echo(item.name)

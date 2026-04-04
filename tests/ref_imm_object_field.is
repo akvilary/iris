@@ -1,0 +1,8 @@
+# EXPECT RUN: Alice
+# Immutable reference to object, access field
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@ref = user
+*echo(ref.name)

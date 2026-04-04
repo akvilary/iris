@@ -1,0 +1,4 @@
+# EXPECT RUN: 5
+# Seq with fill syntax: value repeated N times
+@zeros = ~[0: 5]
+*echo(zeros.len)

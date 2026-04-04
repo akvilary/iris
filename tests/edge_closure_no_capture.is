@@ -1,0 +1,7 @@
+# EXPECT RUN: 9
+# Lambda that captures nothing — just uses its param
+@apply func(@f func(int) ok int, @x int) ok int:
+  result = f(x)
+
+@res = apply(func(@x int) ok int as x * x, 3)
+*echo(res)

@@ -1,0 +1,6 @@
+# EXPECT ERROR: used after move
+# mv func captures 2 vars, both invalid after move
+@a = ~"hello"
+@b = ~"world"
+@f = mv func() ok int as a.len + b.len
+*echo(a)

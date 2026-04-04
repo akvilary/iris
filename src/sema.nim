@@ -136,6 +136,15 @@ proc isHeapTypeAnn(t: TypeExpr): bool =
     return name in ["Seq", "HashTable", "HashSet", "Heap"]
   return false
 
+proc isCopyType(t: TypeExpr): bool =
+  ## Check if type is a primitive that can be implicitly copied (no move needed)
+  if t == nil: return false  # unknown type — be conservative
+  if t of NamedType:
+    return NamedType(t).name in ["int", "int8", "int16", "int32", "int64",
+      "uint", "uint8", "uint16", "uint32", "uint64",
+      "float", "float32", "float64", "bool", "rune", "natural", "str"]
+  return false
+
 proc isPartialMove(e: Expr): bool =
   ## Check if expression is a field access or index into a variable (partial move)
   if e of FieldAccessExpr: return true
@@ -441,8 +450,11 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
           # If source was a mut ref, also invalidate the original
           if srcInfo.isRef and srcInfo.refSource.len > 0:
             ctx.movedVars.incl(srcInfo.refSource)
+      elif isCopyType(srcInfo.typeAnn):
+        # Copy type (int, float, bool, str, etc.) — just copy the value, no borrow tracking
+        discard
       else:
-        # No mv — this is a reference (borrow)
+        # Non-copy, no mv — this is a reference (borrow)
         # Resolve the ultimate source (if srcName is itself a ref, follow the chain)
         let ultimateSrc = if srcInfo.isRef and srcInfo.refSource.len > 0: srcInfo.refSource else: srcName
         isRef = true
@@ -533,19 +545,20 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
           else:
             ctx.error("error: cannot return '" & srcName &
               "' — it is a view of local data that will be freed")
-    # result = variable requires mv (cannot return reference to local)
+    # result = variable requires mv for non-copy types
     if rs.value of IdentExpr:
       let srcName = IdentExpr(rs.value).name
       if srcName != "result":
+        let srcInfo = ctx.lookupVarInfo(srcName)
         if rs.isMv:
-          let srcInfo = ctx.lookupVarInfo(srcName)
           if not srcInfo.isOwn:
             ctx.error("error: cannot move '" & srcName & "' — it is a reference, not an owner. Only owned values can be moved")
           else:
             ctx.movedVars.incl(srcName)
             if srcInfo.isRef and srcInfo.refSource.len > 0:
               ctx.movedVars.incl(srcInfo.refSource)
-        else:
+        elif not isCopyType(srcInfo.typeAnn):
+          # Non-copy type: must use mv to return
           ctx.error("error: cannot return reference to local variable '" & srcName & "' — use 'result = mv " & srcName & "'")
 
   elif s of FnDeclStmt:
@@ -658,9 +671,11 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.initVars = mergedInit
       ctx.movedVars = mergedMoved
     else:
-      # No else — can't guarantee any new initializations or moves
+      # No else — can't guarantee any new initializations
+      # But moves in ANY branch make the var potentially moved (union)
       let initBefore = ctx.initVars
       let movedBefore = ctx.movedVars
+      var mergedMoved = movedBefore
       for branch in ifS.branches:
         ctx.initVars = initBefore
         ctx.movedVars = movedBefore
@@ -671,32 +686,54 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
         ctx.analyzeBody(branch.body)
         ctx.popScope()
         ctx.guardedVars = savedGuarded
+        mergedMoved = mergedMoved + ctx.movedVars  # union: moved in ANY branch
       ctx.initVars = initBefore
-      ctx.movedVars = movedBefore
+      ctx.movedVars = mergedMoved
 
   elif s of WhileStmt:
     let w = WhileStmt(s)
     ctx.analyzeExpr(w.condition)
-    # Loop body may not execute — don't count new inits or moves
+    # Loop body may not execute — don't count new inits
+    # But moves in body make vars potentially moved (second iteration would use-after-move)
     let initBefore = ctx.initVars
     let movedBefore = ctx.movedVars
     ctx.pushScope()
     ctx.analyzeBody(w.body)
     ctx.popScope()
+    let movedInBody = ctx.movedVars
+    # Check: if an outer-scope var was moved, second iteration would use-after-move
+    let newMoves = movedInBody - movedBefore
+    if newMoves.len > 0:
+      ctx.movedVars = movedBefore + newMoves
+      ctx.pushScope()
+      ctx.analyzeBody(w.body)
+      ctx.popScope()
     ctx.initVars = initBefore
-    ctx.movedVars = movedBefore
+    ctx.movedVars = movedBefore + movedInBody  # union: moved in ANY iteration
 
   elif s of ForStmt:
     let f = ForStmt(s)
     ctx.analyzeExpr(f.iter)
-    # Loop body may not execute — don't count new inits or moves
+    # Loop body may not execute — don't count new inits
+    # But moves in body make vars potentially moved (second iteration would use-after-move)
     let initBefore = ctx.initVars
     let movedBefore = ctx.movedVars
     ctx.pushScope()
-    ctx.declareVar(f.varName, VarInfo(name: f.varName, modifier: declDefault))
+    ctx.declareVar(f.varName, VarInfo(name: f.varName, modifier: declDefault, isOwn: true))
     ctx.markInitialized(f.varName)
     ctx.analyzeBody(f.body)
     ctx.popScope()
+    let movedInBody = ctx.movedVars
+    # Check: if an outer-scope var was moved in the body, the second iteration
+    # would use-after-move. Run body again with those vars marked as moved.
+    let newMoves = movedInBody - movedBefore
+    if newMoves.len > 0:
+      ctx.movedVars = movedBefore + newMoves  # simulate second iteration
+      ctx.pushScope()
+      ctx.declareVar(f.varName, VarInfo(name: f.varName, modifier: declDefault, isOwn: true))
+      ctx.markInitialized(f.varName)
+      ctx.analyzeBody(f.body)
+      ctx.popScope()
     if f.elseBranch.len > 0:
       ctx.initVars = initBefore
       ctx.movedVars = movedBefore
@@ -704,7 +741,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.analyzeBody(f.elseBranch)
       ctx.popScope()
     ctx.initVars = initBefore
-    ctx.movedVars = movedBefore
+    ctx.movedVars = movedBefore + movedInBody  # union: moved in ANY iteration
 
   elif s of BlockStmt:
     ctx.pushScope()

@@ -1,0 +1,4 @@
+# EXPECT RUN: value: 42
+# String interpolation with ~"..."
+@x = 42
+*echo(~"value: {x}")

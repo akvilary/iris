@@ -1,0 +1,8 @@
+# EXPECT ERROR: it is a reference
+# Cannot mv a reference — only owners can move
+@Item object:
+  @name String
+
+@item = Item(name=~"hello")
+@y mut = item
+@owned = mv y

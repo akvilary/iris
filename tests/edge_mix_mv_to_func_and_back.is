@@ -1,0 +1,11 @@
+# EXPECT RUN: hello
+# Move into function via mv param, function returns it
+@Item object:
+  @name String
+
+@passthrough func(@x mv Item) ok Item:
+  result = mv x
+
+@item = Item(name=~"hello")
+@got = passthrough(item)
+*echo(got.name)

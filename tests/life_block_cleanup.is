@@ -1,0 +1,7 @@
+# EXPECT C: iris_String_free(&tmp);
+# Block with String, after block String is cleaned up
+@x = 5
+if true:
+  @tmp = ~"temporary"
+  *echo(tmp)
+*echo(x)

@@ -1,0 +1,13 @@
+# EXPECT RUN: 5
+# Chain of function calls f(g(h(x)))
+@twice func(@x int) ok int:
+  result = x * 2
+
+@addOne func(@x int) ok int:
+  result = x + 1
+
+@square func(@x int) ok int:
+  result = x * x
+
+@r = addOne(square(twice(1)))
+*echo(r)

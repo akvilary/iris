@@ -1,0 +1,10 @@
+# EXPECT ERROR: it is a reference
+# Cannot mv from an immutable param — params are borrows
+@Item object:
+  @name String
+
+@steal func(@x Item):
+  @owned = mv x
+
+@item = Item(name=~"hello")
+steal(item)

@@ -1,0 +1,8 @@
+# EXPECT RUN: world
+# Function returns owned value, caller takes ref
+@make func() ok String:
+  result = ~"world"
+
+@s = make()
+@r = s
+*echo(r)

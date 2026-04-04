@@ -1,0 +1,4 @@
+# EXPECT RUN: 42
+# Basic ownership of integer rvalue
+@x = 42
+*echo(x)

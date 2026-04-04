@@ -1,0 +1,5 @@
+# EXPECT RUN: hello world
+# Multiple interpolation parts in one string
+@a = "hello"
+@b = "world"
+*echo(~"{a} {b}")

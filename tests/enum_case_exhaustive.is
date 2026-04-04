@@ -1,0 +1,15 @@
+# EXPECT RUN: medium
+# Case on enum, all branches covered
+@Size enum:
+  @Small
+  @Medium
+  @Large
+
+@s = Size.Medium
+case s:
+  of Small:
+    *echo("small")
+  of Medium:
+    *echo("medium")
+  of Large:
+    *echo("large")

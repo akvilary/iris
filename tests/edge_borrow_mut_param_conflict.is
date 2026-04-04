@@ -1,0 +1,10 @@
+# EXPECT ERROR: cannot be passed as both mut and immutable
+# Pass same var as both mut and immutable param — conflict
+@Item object:
+  @name String
+
+@process func(@a mut Item, @b Item):
+  a.name = ~"changed"
+
+@item mut = Item(name=~"hello")
+process(item, item)

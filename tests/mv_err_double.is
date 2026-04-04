@@ -1,0 +1,5 @@
+# EXPECT ERROR: used after move
+# Double move from same source is an error
+@a = 42
+@b = mv a
+@c = mv a

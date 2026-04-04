@@ -1,0 +1,8 @@
+# EXPECT RUN: hello
+# Create ref in inner scope, after scope ends, mv original
+@s = ~"hello"
+if true:
+  @r = s
+  *echo(r)
+@moved = mv s
+*echo(moved)

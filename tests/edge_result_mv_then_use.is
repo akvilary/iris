@@ -1,0 +1,8 @@
+# EXPECT ERROR: used after move
+# result = mv x, then try to use x — error
+@get func() ok int:
+  @x = 42
+  result = mv x
+  *echo(x)
+
+*echo(get())

@@ -1,0 +1,5 @@
+# EXPECT RUN: 3
+# Seq with method: add element then check len
+@nums mut = ~[1, 2]
+nums.add(3)
+*echo(nums.len)

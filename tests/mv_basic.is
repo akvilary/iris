@@ -1,0 +1,5 @@
+# EXPECT RUN: 42
+# Basic move of integer
+@x = 42
+@y = mv x
+*echo(y)

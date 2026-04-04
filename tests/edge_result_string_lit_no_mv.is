@@ -1,0 +1,6 @@
+# EXPECT RUN: hello
+# result = heap String literal — rvalue, no mv needed
+@greet func() ok String:
+  result = ~"hello"
+
+*echo(greet())

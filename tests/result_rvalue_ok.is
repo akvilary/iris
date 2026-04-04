@@ -1,0 +1,9 @@
+# EXPECT RUN: 42
+# result = rvalue (function call) does not need mv
+@inner func() ok int:
+  result = 42
+
+@outer func() ok int:
+  result = inner()
+
+*echo(outer())

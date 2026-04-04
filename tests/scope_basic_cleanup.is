@@ -1,0 +1,7 @@
+# EXPECT RUN: 42
+# Inner scope String is cleaned up, outer var still usable
+@x = 42
+if true:
+  @s = ~"temp"
+  *echo(s.len)
+*echo(x)

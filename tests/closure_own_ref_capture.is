@@ -1,0 +1,8 @@
+# EXPECT RUN: 15
+# Regular func captures by ref, source still valid after
+@apply func(@f func(int) ok int, @x int) ok int:
+  result = f(x)
+
+@base = 10
+@res = apply(func(@y int) ok int as base + y, 5)
+*echo(res)

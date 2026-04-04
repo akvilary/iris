@@ -1,0 +1,8 @@
+# EXPECT RUN: 10
+# Pass same variable to two immutable params — allowed
+@add func(@a int, @b int) ok int:
+  result = a + b
+
+@x = 5
+@res = add(x, x)
+*echo(res)

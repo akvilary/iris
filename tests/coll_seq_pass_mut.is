@@ -1,0 +1,8 @@
+# EXPECT RUN: 4
+# Pass Seq to func with mut param, func modifies it
+@extend func(@v mut Seq[int]):
+  v.add(99)
+
+@nums mut = ~[1, 2, 3]
+extend(nums)
+*echo(nums.len)

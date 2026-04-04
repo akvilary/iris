@@ -1,0 +1,8 @@
+# EXPECT RUN: 3
+# While true with break condition
+@i mut = 0
+while true:
+  if i == 3:
+    break
+  i += 1
+*echo(i)

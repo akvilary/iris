@@ -1,0 +1,11 @@
+# EXPECT RUN: hello
+# Pass immutable ref to function — works fine
+@Item object:
+  @name String
+
+@show func(@x Item):
+  *echo(x.name)
+
+@item = Item(name=~"hello")
+@r = item
+show(r)

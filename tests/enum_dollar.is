@@ -1,0 +1,9 @@
+# EXPECT RUN: Green
+# Stringify enum with $ (requires string-valued variants)
+@Color enum:
+  @Red = "Red"
+  @Green = "Green"
+  @Blue = "Blue"
+
+@c = Color.Green
+*echo($c)

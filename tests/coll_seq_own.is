@@ -1,0 +1,5 @@
+# EXPECT RUN: 3
+# Create Seq, add items, echo len
+@nums mut = ~[10, 20]
+nums.add(30)
+*echo(nums.len)

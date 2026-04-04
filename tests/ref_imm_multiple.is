@@ -1,0 +1,7 @@
+# EXPECT RUN: 42
+# Multiple immutable references are OK
+@x = 42
+@a = x
+@b = x
+@c = x
+*echo(c)

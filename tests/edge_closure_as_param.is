@@ -1,0 +1,7 @@
+# EXPECT RUN: 7
+# Pass lambda as function parameter and call it
+@run func(@f func(int, int) ok int, @a int, @b int) ok int:
+  result = f(a, b)
+
+@res = run(func(@a int, @b int) ok int as a + b, 3, 4)
+*echo(res)

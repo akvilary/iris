@@ -1,0 +1,5 @@
+# EXPECT RUN: 3
+# Move Seq to another var, use new var
+@nums = ~[1, 2, 3]
+@moved = mv nums
+*echo(moved.len)

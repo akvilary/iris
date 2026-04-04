@@ -1,0 +1,14 @@
+# EXPECT RUN: got error
+# Function returns error, check with if not
+@DivError error:
+  @message String
+
+@divide func(@a int, @b int) ok int else DivError:
+  if b == 0:
+    result = DivError(message=~"division by zero")
+    return
+  result = a / b
+
+@r = divide(10, 0)
+if not r:
+  *echo("got error")

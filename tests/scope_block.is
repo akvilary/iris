@@ -1,0 +1,8 @@
+# EXPECT RUN: done
+# Block scope: owned values cleaned up at block exit
+@msg = ~"done"
+if true:
+  @a = ~"hello"
+  @b = ~"world"
+  *echo(a)
+*echo(msg)

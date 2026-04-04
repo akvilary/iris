@@ -1,0 +1,10 @@
+# EXPECT RUN: hello
+# Func takes mv param and uses it
+@Item object:
+  @name String
+
+@consume func(@x mv Item):
+  *echo(x.name)
+
+@a = Item(name=~"hello")
+consume(a)

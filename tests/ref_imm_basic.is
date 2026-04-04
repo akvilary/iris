@@ -1,0 +1,5 @@
+# EXPECT RUN: 42
+# Basic immutable reference
+@x = 42
+@y = x
+*echo(y)

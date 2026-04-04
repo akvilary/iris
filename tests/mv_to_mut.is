@@ -1,0 +1,5 @@
+# EXPECT RUN: hello
+# Move into a mutable variable
+@x = ~"hello"
+@y mut = mv x
+*echo(y)

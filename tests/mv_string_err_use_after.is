@@ -1,0 +1,5 @@
+# EXPECT ERROR: used after move
+# Use after move for heap String
+@s = ~"hello"
+@t = mv s
+*echo(s)

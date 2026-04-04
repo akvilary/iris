@@ -1,0 +1,4 @@
+# EXPECT RUN: hello
+# Ownership of heap String
+@s = ~"hello"
+*echo(s)

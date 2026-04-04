@@ -1,0 +1,12 @@
+# EXPECT RUN: 3
+# Function returns tuple, caller destructures
+@Pair tuple:
+  @first int
+  @second int
+
+@divmod func(@a int, @b int) ok Pair:
+  result = Pair(a / b, a % b)
+
+@r = divmod(10, 3)
+(@q, @rem) = r
+*echo(q)

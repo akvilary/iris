@@ -1,0 +1,8 @@
+# EXPECT ERROR: cannot borrow
+# Immutable ref while mutable ref exists is an error
+@User object:
+  @name String
+
+@user = User(name=~"Alice")
+@m mut = user
+@r = user

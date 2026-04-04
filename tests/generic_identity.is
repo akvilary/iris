@@ -1,0 +1,6 @@
+# EXPECT RUN: 42
+# Generic identity function with mv param
+@identity func[T](@x mv T) ok T:
+  result = mv x
+
+*echo(identity(42))

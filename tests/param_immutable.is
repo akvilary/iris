@@ -1,0 +1,7 @@
+# EXPECT RUN: 99
+# Function takes immutable param, reads it
+@show func(@val int):
+  *echo(val)
+
+@x = 99
+show(x)

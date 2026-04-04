@@ -1,0 +1,15 @@
+# EXPECT RUN: Green
+# Object with enum field, extract and stringify
+@Color enum:
+  @Red = "Red"
+  @Green = "Green"
+  @Blue = "Blue"
+
+@Pixel object:
+  @color Color
+  @x int
+  @y int
+
+@p = Pixel(color=Color.Green, x=10, y=20)
+@c = p.color
+*echo($c)

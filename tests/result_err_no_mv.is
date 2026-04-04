@@ -1,0 +1,7 @@
+# EXPECT RUN: 42
+# result = local copy type (int) is OK without mv
+@makeNum func() ok int:
+  @x = 42
+  result = x
+
+*echo(makeNum())

@@ -1,0 +1,7 @@
+# EXPECT RUN: 42
+# Caller owns value returned from function
+@getNum func() ok int:
+  result = 42
+
+@x = getNum()
+*echo(x)

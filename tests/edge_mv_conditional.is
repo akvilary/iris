@@ -1,0 +1,7 @@
+# EXPECT ERROR: used after move
+# Move in one if branch only, use after if — not guaranteed alive
+@s = ~"hello"
+if true:
+  @taken = mv s
+  *echo(taken)
+*echo(s)

@@ -1,0 +1,5 @@
+# EXPECT RUN: hello
+# Immutable reference to heap String
+@s = ~"hello"
+@r = s
+*echo(r)

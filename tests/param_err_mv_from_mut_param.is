@@ -1,0 +1,10 @@
+# EXPECT ERROR: cannot move
+# Cannot mv from a mut param — mut params are borrows too
+@Item object:
+  @name String
+
+@steal func(@x mut Item):
+  @owned = mv x
+
+@item mut = Item(name=~"hello")
+steal(item)

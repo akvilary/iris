@@ -1,0 +1,11 @@
+# EXPECT ERROR: used after move
+# mv param takes ownership, caller cannot use variable after
+@Item object:
+  @name String
+
+@consume func(@x mv Item):
+  *echo(x.name)
+
+@item = Item(name=~"hello")
+consume(item)
+*echo(item.name)

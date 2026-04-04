@@ -1,0 +1,5 @@
+# EXPECT RUN: 42
+# Option some: guard check and unwrap
+@val = some(42)
+if val:
+  *echo(->val)

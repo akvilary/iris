@@ -1,0 +1,5 @@
+# EXPECT RUN: 10
+# Capture a variable computed before loop, use in closure
+@base = 10
+@add_base = mv func(@x int) ok int as base + x
+*echo(add_base(0))

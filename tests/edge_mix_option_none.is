@@ -1,0 +1,7 @@
+# EXPECT RUN: nothing
+# Option none: enters else branch
+@val = none(int)
+if val:
+  *echo(->val)
+else:
+  *echo("nothing")

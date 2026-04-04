@@ -1,0 +1,8 @@
+# EXPECT RUN: 10
+# Pass immutable reference to function
+@show func(@val int):
+  *echo(val)
+
+@x = 10
+@y = x
+show(y)

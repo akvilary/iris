@@ -1,0 +1,5 @@
+# EXPECT RUN: 4
+# Mutable Seq with add
+@v mut = ~[1, 2, 3]
+v.add(4)
+*echo(v.len)

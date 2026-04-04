@@ -1,0 +1,5 @@
+# EXPECT RUN: 2
+# Owned values inside loop are cleaned up each iteration
+for @i in 0..2:
+  @s = ~"iter"
+  *echo(i)

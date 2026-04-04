@@ -1,0 +1,5 @@
+# EXPECT C: iris_String_free(&s);
+# For loop creates String each iteration, freed each time
+for @i in 0..<3:
+  @s = ~"iter"
+  *echo(s)

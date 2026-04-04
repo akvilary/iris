@@ -1,0 +1,8 @@
+# EXPECT OK: initialized in both branches
+# @x int, initialized in both if/else branches, use after
+@x int
+if true:
+  x = 10
+else:
+  x = 20
+*echo(x)

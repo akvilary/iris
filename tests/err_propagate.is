@@ -1,0 +1,23 @@
+# EXPECT RUN: got error
+# Chain error handling: inner error propagated via manual check
+@ParseError error:
+  @msg String
+
+@parseNum func(@x int) ok int else ParseError:
+  if x < 0:
+    result = ParseError(msg=~"negative")
+    return
+  result = x * 2
+
+@process func(@x int) ok int else ParseError:
+  @val = parseNum(x)
+  case val:
+    of ok:
+      result = ->val + 1
+    of ParseError:
+      result = ParseError(msg=~"propagated")
+      return
+
+@r = process(-5)
+if not r:
+  *echo("got error")

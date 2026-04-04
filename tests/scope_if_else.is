@@ -1,0 +1,9 @@
+# EXPECT RUN: big
+# Different ownership in if/else branches
+@x = 10
+if x > 5:
+  @s = ~"big"
+  *echo(s)
+else:
+  @s = ~"small"
+  *echo(s)
