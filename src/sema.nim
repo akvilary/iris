@@ -20,6 +20,7 @@ type
     isRef: bool       # true if this variable is a reference to another
     isMutRef: bool    # true if this is a mutable reference
     refSource: string # name of the source variable (if isRef)
+    isOwn: bool       # true if this variable owns its value (can mv)
 
   Scope = object
     vars: Table[string, VarInfo]
@@ -359,7 +360,7 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     # Push scope for lambda params
     ctx.pushScope()
     for p in lam.params:
-      ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn))
+      ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn, isOwn: p.modifier == paramMv))
       ctx.fnParams.incl(p.name)
       ctx.markInitialized(p.name)
     # Analyze body
@@ -431,12 +432,15 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       let srcName = IdentExpr(d.value).name
       let srcInfo = ctx.lookupVarInfo(srcName)
       if d.isMv:
-        # mv — ownership transfer, source becomes invalid
-        heap = heap or srcInfo.isHeap
-        ctx.movedVars.incl(srcName)
-        # If source was a mut ref, also invalidate the original
-        if srcInfo.isRef and srcInfo.refSource.len > 0:
-          ctx.movedVars.incl(srcInfo.refSource)
+        # mv — ownership transfer: only allowed if source owns the value
+        if not srcInfo.isOwn:
+          ctx.error("error: cannot move '" & srcName & "' — it is a reference, not an owner. Only owned values can be moved")
+        else:
+          heap = heap or srcInfo.isHeap
+          ctx.movedVars.incl(srcName)
+          # If source was a mut ref, also invalidate the original
+          if srcInfo.isRef and srcInfo.refSource.len > 0:
+            ctx.movedVars.incl(srcInfo.refSource)
       else:
         # No mv — this is a reference (borrow)
         # Resolve the ultimate source (if srcName is itself a ref, follow the chain)
@@ -462,9 +466,10 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     let resolvedType = if d.typeAnn != nil: d.typeAnn
                        elif d.value != nil: ctx.inferType(d.value)
                        else: nil
-    # Declare the variable
+    # Declare the variable — owned if rvalue or mv, not owned if ref
+    let own = not isRef
     ctx.declareVar(d.name, VarInfo(name: d.name, modifier: d.modifier, typeAnn: resolvedType,
-                                   isHeap: heap, isRef: isRef, isMutRef: isMutRef, refSource: refSource))
+                                   isHeap: heap, isRef: isRef, isMutRef: isMutRef, refSource: refSource, isOwn: own))
     # Mark initialized if it has a value
     if d.value != nil:
       ctx.markInitialized(d.name)
@@ -490,10 +495,13 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # mv tracking for reassignment
     if a.isMv and a.value of IdentExpr:
       let srcName = IdentExpr(a.value).name
-      ctx.movedVars.incl(srcName)
       let srcInfo = ctx.lookupVarInfo(srcName)
-      if srcInfo.isRef and srcInfo.refSource.len > 0:
-        ctx.movedVars.incl(srcInfo.refSource)
+      if not srcInfo.isOwn:
+        ctx.error("error: cannot move '" & srcName & "' — it is a reference, not an owner. Only owned values can be moved")
+      else:
+        ctx.movedVars.incl(srcName)
+        if srcInfo.isRef and srcInfo.refSource.len > 0:
+          ctx.movedVars.incl(srcInfo.refSource)
     # Mark target as initialized
     if a.target of IdentExpr:
       ctx.markInitialized(IdentExpr(a.target).name)
@@ -530,11 +538,13 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       let srcName = IdentExpr(rs.value).name
       if srcName != "result":
         if rs.isMv:
-          ctx.movedVars.incl(srcName)
-          # If source was a ref, also invalidate the original
           let srcInfo = ctx.lookupVarInfo(srcName)
-          if srcInfo.isRef and srcInfo.refSource.len > 0:
-            ctx.movedVars.incl(srcInfo.refSource)
+          if not srcInfo.isOwn:
+            ctx.error("error: cannot move '" & srcName & "' — it is a reference, not an owner. Only owned values can be moved")
+          else:
+            ctx.movedVars.incl(srcName)
+            if srcInfo.isRef and srcInfo.refSource.len > 0:
+              ctx.movedVars.incl(srcInfo.refSource)
         else:
           ctx.error("error: cannot return reference to local variable '" & srcName & "' — use 'result = mv " & srcName & "'")
 
@@ -574,7 +584,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       # str cannot be passed as mut — it references read-only data (.rodata)
       if p.modifier == paramMut and isStrType(p.typeAnn):
         ctx.error("error: parameter '" & p.name & "' has type str which cannot be mut — it references read-only data (.rodata)")
-      ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn))
+      ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn, isOwn: p.modifier == paramMv))
       ctx.fnParams.incl(p.name)
       ctx.markInitialized(p.name)
       # Track borrow params (not own = borrow)

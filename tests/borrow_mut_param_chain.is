@@ -1,0 +1,14 @@
+# EXPECT ERROR: cannot move
+# Cannot mv a mut parameter — you don't own it
+@Item object:
+  @name String
+
+@step2 func(@x mut Item):
+  @owned = mv x
+
+@step1 func(@x mut Item):
+  step2(x)
+
+@item mut = Item(name=~"hello")
+step1(item)
+*echo(item.name)
