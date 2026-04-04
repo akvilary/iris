@@ -229,7 +229,7 @@ proc parseUnary(P: var Parser): Expr =
   of tkDollar:
     discard P.advance()
     DollarExpr(expr: P.parsePostfix())
-  of tkCaret:
+  of tkArrow:
     discard P.advance()
     UnwrapExpr(expr: P.parsePostfix())
   else:
@@ -469,8 +469,12 @@ proc parsePrimary(P: var Parser): Expr =
       fn: IdentExpr(name: if isSome: "some" else: "none"),
       args: @[CallArg(value: arg)]
     )
-  of tkFunc:
-    # Lambda: func(@x int, @y int) ok int = expr
+  of tkMv:
+    # mv func(...) — lambda with ownership captures
+    discard P.advance()
+    if not P.at(tkFunc):
+      P.error("expected 'func' after 'mv'")
+      return nil
     discard P.advance()
     P.expect(tkLParen)
     var params: seq[Param]
@@ -478,7 +482,7 @@ proc parsePrimary(P: var Parser): Expr =
       let name = P.parseAtIdent()
       let modifier = case P.peek()
         of tkMut: discard P.advance(); paramMut
-        of tkOwn: discard P.advance(); paramOwn
+        of tkMv: discard P.advance(); paramMv
         else: paramDefault
       let typeAnn = P.parseType()
       params.add(Param(name: name, modifier: modifier, typeAnn: typeAnn))
@@ -488,7 +492,29 @@ proc parsePrimary(P: var Parser): Expr =
     if P.at(tkOk):
       discard P.advance()
       returnType = P.parseType()
-    P.expect(tkEq)
+    P.expect(tkAs)
+    let body = P.parseExpr()
+    LambdaExpr(params: params, returnType: returnType, body: body, isMv: true)
+  of tkFunc:
+    # Lambda: func(@x int, @y int) ok int as expr
+    discard P.advance()
+    P.expect(tkLParen)
+    var params: seq[Param]
+    while not P.at(tkRParen) and not P.at(tkEof):
+      let name = P.parseAtIdent()
+      let modifier = case P.peek()
+        of tkMut: discard P.advance(); paramMut
+        of tkMv: discard P.advance(); paramMv
+        else: paramDefault
+      let typeAnn = P.parseType()
+      params.add(Param(name: name, modifier: modifier, typeAnn: typeAnn))
+      if P.at(tkComma): discard P.advance()
+    P.expect(tkRParen)
+    var returnType: TypeExpr = nil
+    if P.at(tkOk):
+      discard P.advance()
+      returnType = P.parseType()
+    P.expect(tkAs)
     let body = P.parseExpr()
     LambdaExpr(params: params, returnType: returnType, body: body)
   else:
@@ -682,6 +708,41 @@ proc parseDecl(P: var Parser): Stmt =
       DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn, value: P.parseExpr())
     else:
       DeclStmt(name: at.name, public: at.public, modifier: declDefault, typeAnn: typeAnn)
+  of tkMv:
+    # @name own func(...) — nested function with ownership captures
+    discard P.advance()
+    if not P.at(tkFunc):
+      P.error("expected 'func' after 'mv'")
+      return nil
+    discard P.advance()
+    P.expect(tkLParen)
+    var params: seq[Param]
+    while not P.at(tkRParen) and not P.at(tkEof):
+      let name = P.parseAtIdent()
+      let modifier = case P.peek()
+        of tkMut: discard P.advance(); paramMut
+        of tkMv: discard P.advance(); paramMv
+        else: paramDefault
+      let typeAnn = P.parseType()
+      params.add(Param(name: name, modifier: modifier, typeAnn: typeAnn))
+      if P.at(tkComma): discard P.advance()
+    P.expect(tkRParen)
+    var returnType: TypeExpr = nil
+    var errorTypes: seq[TypeExpr]
+    if P.at(tkOk):
+      discard P.advance()
+      returnType = P.parseType()
+      while P.at(tkElse):
+        discard P.advance()
+        errorTypes.add(P.parseType())
+        while P.at(tkComma):
+          discard P.advance()
+          errorTypes.add(P.parseType())
+    P.expect(tkColon)
+    P.skipNewlines()
+    let body = P.parseBlockBody()
+    FnDeclStmt(name: at.name, public: at.public, isMv: true,
+               params: params, returnType: returnType, errorTypes: errorTypes, body: body)
   of tkFunc:
     discard P.advance()
     # Optional generic params: func[T, U: Concept](...)
@@ -703,7 +764,7 @@ proc parseDecl(P: var Parser): Stmt =
       let name = P.parseAtIdent()
       let modifier = case P.peek()
         of tkMut: discard P.advance(); paramMut
-        of tkOwn: discard P.advance(); paramOwn
+        of tkMv: discard P.advance(); paramMv
         else: paramDefault
       let typeAnn = P.parseType()
       params.add(Param(name: name, modifier: modifier, typeAnn: typeAnn))

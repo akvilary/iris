@@ -1,4 +1,4 @@
 # EXPECT ERROR: must be checked before unwrap
-# ^x without guard is compile error
+# ->x without guard is compile error
 @a = some(42)
-*echo(^a)
+*echo(->a)

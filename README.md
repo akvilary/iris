@@ -266,7 +266,7 @@ Hygienic macros written in Iris itself, called with `*` prefix:
 ```
 @log macro(@msg):
   ast.expand:
-    *echo("[LOG] {^msg^}")
+    *echo("[LOG] {<<msg>>}")
 
 *log("server started")
 ```

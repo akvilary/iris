@@ -1,0 +1,7 @@
+# EXPECT RUN: 3
+@apply func(@f func(int) ok int, @x int) ok int:
+  result = f(x)
+
+@count mut = 0
+@res = apply(func(@x int) ok int as count + x, 3)
+*echo(res)

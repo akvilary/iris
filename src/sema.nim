@@ -35,6 +35,10 @@ type
     guardedVars: HashSet[string]  # Option/Result vars checked by if/case (valid for ^)
     filename: string           # source file path
     currentLine: int           # line of the statement being analyzed
+    # Closure capture tracking
+    fnScopeDepth: int                      # scope index at current function boundary (-1 = top level)
+    currentCaptures: ptr seq[CaptureInfo]  # captures list for current closure (nil = not in closure)
+    currentClosureIsMv: bool              # whether current closure uses own captures
 
 # ── Helpers ──
 
@@ -71,6 +75,13 @@ proc lookupVarInfo(ctx: SemaContext, name: string): VarInfo =
     if name in ctx.scopes[i].vars:
       return ctx.scopes[i].vars[name]
   return VarInfo()
+
+proc lookupVarDepth(ctx: SemaContext, name: string): int =
+  ## Return the scope index where variable is declared, or -1
+  for i in countdown(ctx.scopes.len - 1, 0):
+    if name in ctx.scopes[i].vars:
+      return i
+  return -1
 
 proc markInitialized(ctx: var SemaContext, name: string) =
   ctx.initVars.incl(name)
@@ -192,6 +203,28 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
       # Declared — check assigned-before-use
       elif not ctx.isInitialized(name):
         ctx.error("error: variable '" & name & "' used before initialization")
+      # Closure capture detection
+      elif ctx.currentCaptures != nil:
+        let varDepth = ctx.lookupVarDepth(name)
+        if varDepth >= 0 and varDepth < ctx.fnScopeDepth:
+          # Variable from outer function scope — it's a capture
+          let info = ctx.lookupVarInfo(name)
+          # Check: view types cannot be captured
+          if isViewType(info.typeAnn):
+            ctx.error("error: cannot capture '" & name & "' — view types cannot be stored in closures")
+          else:
+            # Add to captures (avoid duplicates)
+            var alreadyCaptured = false
+            for cap in ctx.currentCaptures[]:
+              if cap.name == name:
+                alreadyCaptured = true
+                break
+            if not alreadyCaptured:
+              let isRef = not ctx.currentClosureIsMv
+              ctx.currentCaptures[].add(CaptureInfo(name: name, isRef: isRef))
+              # For own closures, heap types are moved
+              if ctx.currentClosureIsMv and info.isHeap:
+                ctx.movedVars.incl(name)
     else:
       # Not declared in any scope
       ctx.error("error: undeclared variable '" & name & "'")
@@ -226,7 +259,7 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
                   ctx.error("error: variable '" & mutName & "' cannot be passed as both mut and immutable")
         # Mark own params as moved
         for i in 0..<min(mods.len, call.args.len):
-          if mods[i] == paramOwn and call.args[i].value of IdentExpr:
+          if mods[i] == paramMv and call.args[i].value of IdentExpr:
             ctx.movedVars.incl(IdentExpr(call.args[i].value).name)
 
   elif e of FieldAccessExpr:
@@ -290,10 +323,47 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
     if uw.expr of IdentExpr:
       let name = IdentExpr(uw.expr).name
       if name notin ctx.guardedVars:
-        ctx.error("error: '^" & name & "' — Option/Result must be checked before unwrap (use 'if " & name & ":' or 'case " & name & ":')")
+        ctx.error("error: '->" & name & "' — Option/Result must be checked before unwrap (use 'if " & name & ":' or 'case " & name & ":')")
 
   elif e of QuestionExpr:
     ctx.analyzeExpr(QuestionExpr(e).expr)
+
+  elif e of LambdaExpr:
+    let lam = LambdaExpr(e)
+    # Save closure context
+    let savedFnScopeDepth = ctx.fnScopeDepth
+    let savedCaptures = ctx.currentCaptures
+    let savedClosureIsOwn = ctx.currentClosureIsMv
+    let savedParams = ctx.fnParams
+    let savedMoved = ctx.movedVars
+    # Set up closure context
+    ctx.fnScopeDepth = ctx.scopes.len  # current depth = function boundary
+    ctx.currentCaptures = addr(lam.captures)
+    ctx.currentClosureIsMv = lam.isMv
+    ctx.fnParams = initHashSet[string]()
+    # Push scope for lambda params
+    ctx.pushScope()
+    for p in lam.params:
+      ctx.declareVar(p.name, VarInfo(name: p.name, modifier: declDefault, typeAnn: p.typeAnn))
+      ctx.fnParams.incl(p.name)
+      ctx.markInitialized(p.name)
+    # Analyze body
+    ctx.analyzeExpr(lam.body)
+    ctx.popScope()
+    # Restore closure context
+    ctx.fnScopeDepth = savedFnScopeDepth
+    ctx.currentCaptures = savedCaptures
+    ctx.currentClosureIsMv = savedClosureIsOwn
+    ctx.fnParams = savedParams
+    # For own closures, propagate moved vars to outer scope (heap captures are moved)
+    if lam.isMv:
+      for cap in lam.captures:
+        if not cap.isRef:
+          let info = ctx.lookupVarInfo(cap.name)
+          if info.isHeap:
+            ctx.movedVars.incl(cap.name)
+    else:
+      ctx.movedVars = savedMoved
 
   elif e of IfExpr:
     let ie = IfExpr(e)
@@ -416,6 +486,19 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     ctx.markInitialized(f.name)
     # Track param modifiers for borrow checking at call sites
     ctx.fnParamMods[f.name] = f.params.mapIt(it.modifier)
+    # Save closure context
+    let savedFnScopeDepth = ctx.fnScopeDepth
+    let savedCaptures = ctx.currentCaptures
+    let savedClosureIsOwn = ctx.currentClosureIsMv
+    # Set up closure context for nested functions
+    let isNested = ctx.currentCaptures != nil or ctx.fnScopeDepth > 0
+    if isNested or f.isMv:
+      ctx.fnScopeDepth = ctx.scopes.len  # current depth = function boundary
+      ctx.currentCaptures = addr(f.captures)
+      ctx.currentClosureIsMv = f.isMv
+    else:
+      ctx.currentCaptures = nil  # top-level function, no captures
+      ctx.fnScopeDepth = 0
     # Analyze body in a new scope with params as initialized
     ctx.pushScope()
     let savedParams = ctx.fnParams
@@ -436,18 +519,29 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
       ctx.fnParams.incl(p.name)
       ctx.markInitialized(p.name)
       # Track borrow params (not own = borrow)
-      if p.modifier != paramOwn:
+      if p.modifier != paramMv:
         ctx.currentFnBorrowParams.incl(p.name)
     # 'result' is always available in functions with return type
     if f.returnType != nil:
       ctx.fnParams.incl("result")
     ctx.analyzeBody(f.body)
     ctx.fnParams = savedParams
-    ctx.movedVars = savedMoved
     ctx.currentFnReturnsBorrow = savedReturnsBorrow
     ctx.currentFnReturnType = savedReturnType
     ctx.currentFnBorrowParams = savedBorrowParams
     ctx.popScope()
+    # Restore closure context, propagate moves for own captures
+    if f.isMv:
+      for cap in f.captures:
+        if not cap.isRef:
+          let info = ctx.lookupVarInfo(cap.name)
+          if info.isHeap:
+            ctx.movedVars.incl(cap.name)
+    else:
+      ctx.movedVars = savedMoved
+    ctx.fnScopeDepth = savedFnScopeDepth
+    ctx.currentCaptures = savedCaptures
+    ctx.currentClosureIsMv = savedClosureIsOwn
 
   elif s of IfStmt:
     let ifS = IfStmt(s)

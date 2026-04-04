@@ -27,7 +27,7 @@ type
     tkCase, tkOf, tkDiscard
     tkNot, tkAnd, tkOr
     tkSome, tkNone, tkOk
-    tkQuit, tkOwn
+    tkQuit, tkMv, tkAs
     tkTemplate, tkMacro, tkAfter
     tkShl, tkShr, tkXor
 
@@ -47,7 +47,6 @@ type
     tkQuestion    # ?
     tkAt          # @
     tkDollar      # $
-    tkCaret       # ^
     tkTilde       # ~
     tkAmpersand   # &
 
@@ -126,7 +125,7 @@ let keywords* = {
   "case": tkCase, "of": tkOf, "discard": tkDiscard,
   "not": tkNot, "and": tkAnd, "or": tkOr,
   "some": tkSome, "none": tkNone, "ok": tkOk,
-  "quit": tkQuit, "own": tkOwn,
+  "quit": tkQuit, "mv": tkMv, "as": tkAs,
   "template": tkTemplate, "macro": tkMacro, "after": tkAfter,
   "shl": tkShl, "shr": tkShr, "xor": tkXor,
 }.toTable

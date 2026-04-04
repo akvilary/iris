@@ -1,0 +1,7 @@
+# EXPECT RUN: 20
+@apply func(@f func(int) ok int, @x int) ok int:
+  result = f(x)
+
+@factor = 4
+@res = apply(func(@x int) ok int as x * factor, 5)
+*echo(res)

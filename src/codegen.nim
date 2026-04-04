@@ -38,13 +38,20 @@ type
     emittedSeqTypes*: seq[string]  # already emitted Seq specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
-    movedVars*: seq[string]  # variables moved via result = x or own param
+    movedVars*: seq[string]  # variables moved via result = x or mv param
     scopeVars*: seq[seq[string]]  # stack of variable names per scope
-    fnOwnParams*: Table[string, seq[int]]  # func name -> indices of own params
+    fnMvParams*: Table[string, seq[int]]  # func name -> indices of mv params
     fnParamMods*: Table[string, seq[ParamModifier]]  # func name -> param modifiers
     refVars*: HashSet[string]  # variables that are pointers (mut params)
     loopScopeStack*: seq[int]  # stack of scope depths for unlabeled break/continue
     labeledLoopScopes*: Table[string, int]  # label → scope depth for labeled break/continue
+    # Closure support
+    closureTypes*: Table[string, string]    # signature key -> "iris_Fn_N"
+    closureTypeCounter*: int
+    closureWrappers*: Table[string, string] # func name -> wrapper name
+    preStmts*: string                       # env allocation code to emit before current statement
+    insideFn*: bool                         # true when generating inside a function body
+    capturedVarAccess*: Table[string, string]  # var name -> "env->name" or "(*env->name)"
 
 proc newCodeGen*(): CodeGen =
   CodeGen(varTypes: initTable[string, string](),
@@ -66,9 +73,14 @@ proc nextTmp(g: var CodeGen): string =
   g.tmpCounter += 1
   "iris_destruct_" & $g.tmpCounter
 
+proc flushPreStmts(g: var CodeGen) =
+  if g.preStmts.len > 0:
+    g.emit(g.preStmts)
+    g.preStmts = ""
+
 # ── Type mapping ──
 
-proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
+proc typeToCStr*(g: var CodeGen, t: TypeExpr): string =
   if t == nil: return "void"
   if t of NamedType:
     let n = NamedType(t).name
@@ -106,8 +118,21 @@ proc typeToCStr*(g: CodeGen, t: TypeExpr): string =
   elif t of FuncType:
     let ft = FuncType(t)
     let ret = if ft.returnType != nil: g.typeToCStr(ft.returnType) else: "void"
-    let params = ft.paramTypes.mapIt(g.typeToCStr(it)).join(", ")
-    ret & "(*)(" & (if params.len > 0: params else: "void") & ")"
+    var paramCTypes: seq[string]
+    for pt in ft.paramTypes:
+      paramCTypes.add(g.typeToCStr(pt))
+    let sigKey = paramCTypes.join(",") & "->" & ret
+    if sigKey in g.closureTypes:
+      g.closureTypes[sigKey]
+    else:
+      let name = "iris_Fn_" & $g.closureTypeCounter
+      g.closureTypeCounter += 1
+      g.closureTypes[sigKey] = name
+      # Generate fat pointer struct typedef
+      let fnParams = "void*" & (if paramCTypes.len > 0: ", " & paramCTypes.join(", ") else: "")
+      var td = "typedef struct { " & ret & " (*fn)(" & fnParams & "); void* env; } " & name & ";\n"
+      g.pendingSpecializations.add(td)
+      name
   elif t of TupleType:
     "/* tuple type */"
   else:
@@ -145,8 +170,10 @@ proc htValType(ct: string): string =
 
 proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
 
+proc isClosureType*(ct: string): bool = ct.startsWith("iris_Fn_")
+
 proc isHeapType(ct: string): bool =
-  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_")
+  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_") or ct.isClosureType()
 
 proc needsFree(g: CodeGen, ct: string): bool =
   ## Recursively check if a C type needs freeing (like Rust's Drop)
@@ -172,6 +199,8 @@ proc freeExprStr(g: CodeGen, expr: string, ct: string): string =
       return ct & "_free(" & expr & ");"
     else:
       return "free(" & expr & ");"
+  elif ct.isClosureType():
+    return "if (" & expr & ".env) free(" & expr & ".env);"
   elif ct in g.typeFields:
     return ct & "_free(&" & expr & ");"
   return ""
@@ -323,12 +352,10 @@ proc escapeC(s: string): string =
     of '%': result.add("%%")
     else: result.add(ch)
 
-proc formatParam(g: CodeGen, p: Param): string =
+proc formatParam(g: var CodeGen, p: Param): string =
   if p.typeAnn of FuncType:
-    let ft = FuncType(p.typeAnn)
-    let ret = if ft.returnType != nil: g.typeToCStr(ft.returnType) else: "void"
-    let fparams = ft.paramTypes.mapIt(g.typeToCStr(it)).join(", ")
-    ret & "(*" & p.name & ")(" & (if fparams.len > 0: fparams else: "void") & ")"
+    let closureType = g.typeToCStr(p.typeAnn)  # returns iris_Fn_N
+    closureType & " " & p.name
   elif p.modifier == paramMut:
     let ct = g.typeToCStr(p.typeAnn)
     if needsRefParam(ct):
@@ -338,13 +365,16 @@ proc formatParam(g: CodeGen, p: Param): string =
   else:
     g.typeToCStr(p.typeAnn) & " " & p.name
 
-proc formatParams*(g: CodeGen, params: seq[Param]): string =
+proc formatParams*(g: var CodeGen, params: seq[Param]): string =
   if params.len == 0: return "void"
-  params.mapIt(g.formatParam(it)).join(", ")
+  var parts: seq[string]
+  for p in params:
+    parts.add(g.formatParam(p))
+  parts.join(", ")
 
-proc inferCType(g: CodeGen, e: Expr): string
+proc inferCType(g: var CodeGen, e: Expr): string
 
-proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
+proc printfFormat(g: var CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   if e of StringLitExpr: return ("%s", false)
   if e of FloatLitExpr: return ("%g", false)
   if e of BoolLitExpr: return ("%s", false)
@@ -380,7 +410,7 @@ proc printfFormat(g: CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   of "double", "float": return ("%g", false)
   else: return ("%lld", true)
 
-proc inferCType(g: CodeGen, e: Expr): string =
+proc inferCType(g: var CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
   if e of StringLitExpr: return "iris_str"
@@ -477,8 +507,20 @@ proc inferCType(g: CodeGen, e: Expr): string =
   if e of LambdaExpr:
     let lam = LambdaExpr(e)
     let ret = if lam.returnType != nil: g.typeToCStr(lam.returnType) else: "void"
-    let params = lam.params.mapIt(g.typeToCStr(it.typeAnn)).join(", ")
-    return ret & "(*)(" & (if params.len > 0: params else: "void") & ")"
+    var paramCTypes: seq[string]
+    for p in lam.params:
+      paramCTypes.add(g.typeToCStr(p.typeAnn))
+    let sigKey = paramCTypes.join(",") & "->" & ret
+    if sigKey in g.closureTypes:
+      return g.closureTypes[sigKey]
+    else:
+      let name = "iris_Fn_" & $g.closureTypeCounter
+      g.closureTypeCounter += 1
+      g.closureTypes[sigKey] = name
+      let fnParams = "void*" & (if paramCTypes.len > 0: ", " & paramCTypes.join(", ") else: "")
+      g.pendingSpecializations.add(
+        "typedef struct { " & ret & " (*fn)(" & fnParams & "); void* env; } " & name & ";\n")
+      return name
   if e of IdentExpr:
     return g.varTypes.getOrDefault(IdentExpr(e).name, "int64_t")
   if e of IfExpr:
@@ -888,7 +930,9 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.emit("'" & $RuneLitExpr(e).val & "'")
   elif e of IdentExpr:
     let name = IdentExpr(e).name
-    if name in g.nameAliases:
+    if name in g.capturedVarAccess:
+      g.emit(g.capturedVarAccess[name])
+    elif name in g.nameAliases:
       g.emit(g.nameAliases[name])
     elif name in g.refVars:
       g.emit("(*" & name & ")")
@@ -1197,26 +1241,45 @@ proc genExpr(g: var CodeGen, e: Expr) =
                 "error: type mismatch in argument " & $(i+1) & " of '" & fname &
                 "' — expected '" & g.cTypeToIris(paramTypes[i]) &
                 "', got '" & g.cTypeToIris(argType) & "'")
-    g.genExpr(c.fn); g.emit("(")
-    # Get param modifiers for this function
-    var mods: seq[ParamModifier]
+    # Check if calling through a closure variable
+    var isClosureCall = false
+    var closureVarName = ""
     if c.fn of IdentExpr:
       let fname = IdentExpr(c.fn).name
-      if fname in g.fnParamMods:
-        mods = g.fnParamMods[fname]
-    for i, arg in c.args:
-      if i > 0: g.emit(", ")
-      # Add & for mut params of ref-passable types
-      if i < mods.len and mods[i] == paramMut and arg.value of IdentExpr:
-        let argName = IdentExpr(arg.value).name
-        let ct = g.varCType(argName)
-        if needsRefParam(ct):
-          g.emit(g.addrOf(argName))
+      let fct = g.varCType(fname)
+      if fct.isClosureType():
+        isClosureCall = true
+        closureVarName = fname
+        # Also check capturedVarAccess for closures-inside-closures
+        if fname in g.capturedVarAccess:
+          closureVarName = g.capturedVarAccess[fname]
+    if isClosureCall:
+      g.emit(closureVarName & ".fn(" & closureVarName & ".env")
+      for arg in c.args:
+        g.emit(", ")
+        g.genExpr(arg.value)
+      g.emit(")")
+    else:
+      g.genExpr(c.fn); g.emit("(")
+      # Get param modifiers for this function
+      var mods: seq[ParamModifier]
+      if c.fn of IdentExpr:
+        let fname = IdentExpr(c.fn).name
+        if fname in g.fnParamMods:
+          mods = g.fnParamMods[fname]
+      for i, arg in c.args:
+        if i > 0: g.emit(", ")
+        # Add & for mut params of ref-passable types
+        if i < mods.len and mods[i] == paramMut and arg.value of IdentExpr:
+          let argName = IdentExpr(arg.value).name
+          let ct = g.varCType(argName)
+          if needsRefParam(ct):
+            g.emit(g.addrOf(argName))
+          else:
+            g.genExpr(arg.value)
         else:
           g.genExpr(arg.value)
-      else:
-        g.genExpr(arg.value)
-    g.emit(")")
+      g.emit(")")
   elif e of FieldAccessExpr:
     let f = FieldAccessExpr(e)
     if f.expr of IdentExpr:
@@ -1457,15 +1520,46 @@ proc genExpr(g: var CodeGen, e: Expr) =
     g.emit(")")
   elif e of LambdaExpr:
     let lam = LambdaExpr(e)
-    let name = "iris_lambda_" & $g.tmpCounter; g.tmpCounter += 1
+    let lamId = g.tmpCounter; g.tmpCounter += 1
+    let fnName = "iris_lambda_" & $lamId
     let ret = if lam.returnType != nil: g.typeToCStr(lam.returnType) else: "void"
-    var paramStrs: seq[string]
+    let hasCaps = lam.captures.len > 0
+    # Build closure type name from lambda signature
+    var paramCTypes: seq[string]
+    for p in lam.params:
+      paramCTypes.add(g.typeToCStr(p.typeAnn))
+    let sigKey = paramCTypes.join(",") & "->" & ret
+    var closureTypeName: string
+    if sigKey in g.closureTypes:
+      closureTypeName = g.closureTypes[sigKey]
+    else:
+      closureTypeName = "iris_Fn_" & $g.closureTypeCounter
+      g.closureTypeCounter += 1
+      g.closureTypes[sigKey] = closureTypeName
+      let fnParams = "void*" & (if paramCTypes.len > 0: ", " & paramCTypes.join(", ") else: "")
+      g.pendingSpecializations.add(
+        "typedef struct { " & ret & " (*fn)(" & fnParams & "); void* env; } " & closureTypeName & ";\n")
+    # Generate env struct if captures present
+    let envType = "iris_env_" & $lamId
+    if hasCaps:
+      var envDef = "typedef struct {\n"
+      for cap in lam.captures:
+        let capCt = g.varCType(cap.name)
+        if cap.isRef:
+          envDef.add("  " & capCt & "* " & cap.name & ";\n")
+        else:
+          envDef.add("  " & capCt & " " & cap.name & ";\n")
+      envDef.add("} " & envType & ";\n")
+      g.pendingSpecializations.add(envDef)
+    # Generate lambda function with void* first param
+    var paramStrs = @["void* _env"]
     for p in lam.params:
       paramStrs.add(g.typeToCStr(p.typeAnn) & " " & p.name)
-    let params = if paramStrs.len > 0: paramStrs.join(", ") else: "void"
-    # Generate function into pendingSpecializations
-    var fn = ""
-    fn.add("static " & ret & " " & name & "(" & params & ") {\n")
+    let paramsStr = paramStrs.join(", ")
+    var fn = "static " & ret & " " & fnName & "(" & paramsStr & ") {\n"
+    # Cast env pointer and extract captures
+    if hasCaps:
+      fn.add("  " & envType & "* env = (" & envType & "*)_env;\n")
     if ret != "void":
       fn.add("  return ")
     else:
@@ -1473,8 +1567,15 @@ proc genExpr(g: var CodeGen, e: Expr) =
     # Generate body expression into a temporary buffer
     let origOutput = g.output
     g.output = ""
-    # Set up param types for inference
     var savedTypes: seq[(string, string)]
+    # Set up captured variable types for body generation
+    for cap in lam.captures:
+      let capCt = g.varCType(cap.name)
+      if cap.name in g.varTypes:
+        savedTypes.add((cap.name, g.varTypes[cap.name]))
+      else:
+        savedTypes.add((cap.name, ""))
+      g.varTypes[cap.name] = capCt
     for p in lam.params:
       let ct = g.typeToCStr(p.typeAnn)
       if p.name in g.varTypes:
@@ -1482,16 +1583,42 @@ proc genExpr(g: var CodeGen, e: Expr) =
       else:
         savedTypes.add((p.name, ""))
       g.varTypes[p.name] = ct
+    # Set up captured var access expressions
+    let savedCapturedAccess = g.capturedVarAccess
+    g.capturedVarAccess = initTable[string, string]()
+    if hasCaps:
+      for cap in lam.captures:
+        if cap.isRef:
+          g.capturedVarAccess[cap.name] = "(*env->" & cap.name & ")"
+        else:
+          g.capturedVarAccess[cap.name] = "env->" & cap.name
     g.genExpr(lam.body)
     let bodyCode = g.output
     g.output = origOutput
+    g.capturedVarAccess = savedCapturedAccess
     # Restore var types
     for (n, v) in savedTypes:
       if v.len > 0: g.varTypes[n] = v
       else: g.varTypes.del(n)
     fn.add(bodyCode & ";\n}\n")
     g.pendingSpecializations.add(fn)
-    g.emit(name)
+    # Generate env allocation and fat pointer expression
+    if hasCaps:
+      let envVar = "iris_tmpenv_" & $lamId
+      let ind = "  ".repeat(g.indent)
+      if lam.isMv:
+        g.preStmts.add(ind & envType & "* " & envVar & " = (" & envType & "*)malloc(sizeof(" & envType & "));\n")
+      else:
+        g.preStmts.add(ind & envType & " " & envVar & "_stack;\n")
+        g.preStmts.add(ind & envType & "* " & envVar & " = &" & envVar & "_stack;\n")
+      for cap in lam.captures:
+        if cap.isRef:
+          g.preStmts.add(ind & envVar & "->" & cap.name & " = &" & cap.name & ";\n")
+        else:
+          g.preStmts.add(ind & envVar & "->" & cap.name & " = " & cap.name & ";\n")
+      g.emit("(" & closureTypeName & "){ " & fnName & ", " & envVar & " }")
+    else:
+      g.emit("(" & closureTypeName & "){ " & fnName & ", NULL }")
   else:
     g.emit("/* expr not implemented */")
 
@@ -1584,9 +1711,9 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     g.varTypes[d.name] = ctype
     if g.needsFree(ctype):
       g.trackVar(d.name)
-    g.emitIndent()
     if d.value == nil:
       # Declaration without value: @x int — assigned later
+      g.emitIndent()
       g.emit(ctype & " " & d.name & ";\n")
     else:
       # HashTable/HashSet literals with entries: declare then populate
@@ -1596,6 +1723,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         let vt = g.inferCType(ht.entries[0].value)
         let htType = "iris_HT_" & kt & "__" & vt
         g.ensureHashTableType(kt, vt)
+        g.emitIndent()
         g.emit(ctype & " " & d.name & " = " & htType & "_new(" & $(ht.entries.len * 2) & ");\n")
         for entry in ht.entries:
           g.emitIndent(); g.emit(htType & "_set(&" & d.name & ", ")
@@ -1608,12 +1736,20 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         let et = g.inferCType(hs.elems[0])
         let hsType = "iris_HS_" & et
         g.ensureHashSetType(et)
+        g.emitIndent()
         g.emit(ctype & " " & d.name & " = " & hsType & "_new(" & $(hs.elems.len * 2) & ");\n")
         for el in hs.elems:
           g.emitIndent(); g.emit(hsType & "_add(&" & d.name & ", ")
           g.genExpr(el)
           g.emit(");\n")
       else:
+        # Generate value expression into temp buffer (may populate preStmts)
+        let savedOut = g.output; g.output = ""
+        g.genExpr(d.value)
+        let exprCode = g.output; g.output = savedOut
+        # Flush any pre-statements (e.g., closure env allocation)
+        g.flushPreStmts()
+        g.emitIndent()
         case d.modifier
         of declDefault, declConst:
           if g.needsFree(ctype):
@@ -1622,7 +1758,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
             g.emit("const " & ctype & " " & d.name & " = ")
         of declMut:
           g.emit(ctype & " " & d.name & " = ")
-        g.genExpr(d.value)
+        g.emit(exprCode)
         g.emit(";\n")
     # Track move: @t = s where s is heap → mark s as moved
     if d.value != nil and d.value of IdentExpr:
@@ -1773,13 +1909,17 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         g.genExpr(val)
         g.emit(";\n")
         return
-    # result = value
+    # result = value — generate into temp buffer for preStmts support
+    let savedOut = g.output; g.output = ""
+    g.genExpr(val)
+    let exprCode = g.output; g.output = savedOut
+    g.flushPreStmts()
     g.emitIndent()
     if g.inResultFunc:
       g.emit("iris_result.value = ")
     else:
       g.emit("iris_result = ")
-    g.genExpr(val); g.emit(";\n")
+    g.emit(exprCode); g.emit(";\n")
     # Track moved variable (ownership transfer to result)
     if val of IdentExpr:
       let varName = IdentExpr(val).name
@@ -1831,8 +1971,12 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         g.emitLine("};")
         g.indent -= 1
         g.emit("} " & resultName & ";\n")
-      # Function returns Result struct
-      g.emit(resultName & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
+      let paramsStr = g.formatParams(f.params)
+      # Generate body into temp buffer to collect closure specializations
+      let savedOutput = g.output
+      let savedPending = g.pendingSpecializations
+      g.output = ""
+      g.pendingSpecializations = ""
       g.indent += 1
       g.emitLine(resultName & " iris_result;")
       g.emitLine("iris_result.kind = " & resultName & "_Ok;")
@@ -1843,11 +1987,10 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.pushScope()
       let savedRefs = g.refVars
       g.refVars = initHashSet[string]()
-      # Register param types, track own/mut params
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
-        if p.modifier == paramOwn and g.needsFree(ct):
+        if p.modifier == paramMv and g.needsFree(ct):
           g.trackVar(p.name)
         if p.modifier == paramMut and needsRefParam(ct):
           g.refVars.incl(p.name)
@@ -1859,10 +2002,23 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.inResultFunc = false
       g.emitLine("return iris_result;")
       g.indent -= 1
+      let bodyCode = g.output
+      let closureSpecs = g.pendingSpecializations
+      g.output = savedOutput
+      g.pendingSpecializations = savedPending
+      if closureSpecs.len > 0:
+        g.emit(closureSpecs)
+      g.emit(resultName & " " & f.name & "(" & paramsStr & ") {\n")
+      g.emit(bodyCode)
       g.emit("}\n")
     else:
       let ret = if hasReturn: g.typeToCStr(f.returnType) else: "void"
-      g.emit(ret & " " & f.name & "(" & g.formatParams(f.params) & ") {\n")
+      let paramsStr = g.formatParams(f.params)
+      # Generate body into temp buffer to collect closure specializations
+      let savedOutput = g.output
+      let savedPending = g.pendingSpecializations
+      g.output = ""
+      g.pendingSpecializations = ""
       g.indent += 1
       if hasReturn: g.emitLine(ret & " iris_result;")
       let savedMoved = g.movedVars
@@ -1874,7 +2030,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       for p in f.params:
         let ct = g.typeToCStr(p.typeAnn)
         g.varTypes[p.name] = ct
-        if p.modifier == paramOwn and g.needsFree(ct):
+        if p.modifier == paramMv and g.needsFree(ct):
           g.trackVar(p.name)
         if p.modifier == paramMut and needsRefParam(ct):
           g.refVars.incl(p.name)
@@ -1885,6 +2041,15 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.movedVars = savedMoved
       if hasReturn: g.emitLine("return iris_result;")
       g.indent -= 1
+      let bodyCode = g.output
+      let closureSpecs = g.pendingSpecializations
+      g.output = savedOutput
+      g.pendingSpecializations = savedPending
+      # Emit closure specializations before the function
+      if closureSpecs.len > 0:
+        g.emit(closureSpecs)
+      g.emit(ret & " " & f.name & "(" & paramsStr & ") {\n")
+      g.emit(bodyCode)
       g.emit("}\n")
 
   elif s of IfStmt:
@@ -2030,8 +2195,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let call = CallExpr(expr)
       if call.fn of IdentExpr:
         let fnName = IdentExpr(call.fn).name
-        if fnName in g.fnOwnParams:
-          for idx in g.fnOwnParams[fnName]:
+        if fnName in g.fnMvParams:
+          for idx in g.fnMvParams[fnName]:
             if idx < call.args.len and call.args[idx].value of IdentExpr:
               let argName = IdentExpr(call.args[idx].value).name
               if argName notin g.movedVars:
@@ -2455,10 +2620,10 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
       g.fnParamMods[f.name] = f.params.mapIt(it.modifier)
       var ownIndices: seq[int]
       for i, p in f.params:
-        if p.modifier == paramOwn:
+        if p.modifier == paramMv:
           ownIndices.add(i)
       if ownIndices.len > 0:
-        g.fnOwnParams[f.name] = ownIndices
+        g.fnMvParams[f.name] = ownIndices
   g.emit("\n")
 
   # Functions (non-generic)

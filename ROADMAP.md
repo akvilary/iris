@@ -38,7 +38,7 @@ Minimal compiler that can compile basic Iris programs to C.
 - [ ] Lambdas without capture (func as argument, no environment)
 - [ ] Closures with capture (heap environment struct, by reference)
 - [ ] Reject view[T] in closure captures
-- [ ] Ownership + borrow checker (immutable borrow, mut, own)
+- [ ] Ownership + borrow checker (immutable borrow, mut, mv)
 - [ ] Lifetime inference (3 rules, no annotations)
 - [ ] Pool for cyclic references
 - [ ] Compile-time verification of borrows

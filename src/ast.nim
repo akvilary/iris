@@ -18,7 +18,7 @@ type
   ParamModifier* = enum
     paramDefault  # immutable ref (auto)
     paramMut      # mutable ref
-    paramOwn      # takes ownership
+    paramMv       # takes ownership (move)
 
   CasePatternKind* = enum
     patVariant    # enum member or union type
@@ -180,10 +180,16 @@ type
     branches*: seq[CaseExprBranch]
     elseValue*: Expr
 
+  CaptureInfo* = object
+    name*: string
+    isRef*: bool   # true = by reference, false = by value (copy/move)
+
   LambdaExpr* = ref object of Expr
     params*: seq[Param]
     returnType*: TypeExpr
     body*: Expr
+    isMv*: bool                   # mv func(...) — capture by value/move
+    captures*: seq[CaptureInfo]   # filled by sema
 
   # ── Type expressions ──
 
@@ -237,6 +243,8 @@ type
   FnDeclStmt* = ref object of Stmt
     name*: string
     public*: bool
+    isMv*: bool                        # mv func — closure with value captures
+    captures*: seq[CaptureInfo]        # filled by sema (non-empty = closure)
     genericParams*: seq[GenericParam]  # [T, U: Concept] — empty if not generic
     params*: seq[Param]
     returnType*: TypeExpr  # nil = void

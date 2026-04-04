@@ -1,0 +1,4 @@
+# EXPECT ERROR: used after move
+@s = ~"hello"
+@f = mv func() ok int as s.len
+*echo(s)

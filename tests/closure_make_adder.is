@@ -1,0 +1,6 @@
+# EXPECT RUN: 15
+@makeAdder func(@x int) ok func(int) ok int:
+  result = mv func(@y int) ok int as x + y
+
+@add10 = makeAdder(10)
+*echo(add10(5))

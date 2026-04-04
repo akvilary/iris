@@ -243,7 +243,6 @@ proc readOperator(L: var Lexer): bool =
   of '?': emit1(tkQuestion)
   of '@': emit1(tkAt)
   of '$': emit1(tkDollar)
-  of '^': emit1(tkCaret)
   of '~': emit1(tkTilde)
   of '&': emit1(tkAmpersand)
   of '(':

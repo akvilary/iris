@@ -1,0 +1,4 @@
+# EXPECT RUN: 15
+@x = 10
+@add_x = mv func(@y int) ok int as x + y
+*echo(add_x(5))

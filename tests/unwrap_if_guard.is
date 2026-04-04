@@ -1,5 +1,5 @@
 # EXPECT RUN: 42
-# ^x is valid inside if x: guard
+# ->x is valid inside if x: guard
 @a = some(42)
 if a:
-  *echo(^a)
+  *echo(->a)
