@@ -203,7 +203,7 @@ Three string types with clear semantics:
 @msg = ~"hello {name}!"      # String — owned interpolation
 ```
 
-In function parameters, `view[String]` accepts both `str` and `String` at zero cost.
+In function parameters, `String` accepts both `str` and `String` at zero cost.
 
 ### Heap control with `~`
 
@@ -211,7 +211,7 @@ Stack by default. Heap only when you ask for it — always with `~`:
 
 ```
 @nums = [1, 2, 3]            # array[int, 3] — stack
-@dynNums = ~[1, 2, 3]        # Seq[int] — heap
+@dynNums = ~[1, 2, 3]        # List[int] — heap
 
 @scores = ~{"alice": 100}    # HashTable[str, int]
 @ids = ~{1, 2, 3}            # HashSet[int]

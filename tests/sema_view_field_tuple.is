@@ -1,5 +1,0 @@
-# EXPECT ERROR: views cannot be stored in fields
-
-@BadTuple tuple:
-  @x int
-  @ref view[String]

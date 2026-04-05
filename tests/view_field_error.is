@@ -1,0 +1,4 @@
+# EXPECT ERROR: view cannot be stored in fields
+@BadError error:
+  @msg str
+  @source view[int]

@@ -1,5 +1,0 @@
-# EXPECT ERROR: views cannot be stored in fields
-
-@Bad object:
-  @name str
-  @data view[String]

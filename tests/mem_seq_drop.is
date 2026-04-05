@@ -1,5 +1,5 @@
-# EXPECT C: iris_Seq_int64_t_free(&nums);
-# Seq must be freed at scope exit
+# EXPECT C: iris_List_int64_t_free(&nums);
+# List must be freed at scope exit
 @nums mut = ~[10, 20, 30]
 nums.add(40)
 *echo(nums.len)

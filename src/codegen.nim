@@ -35,7 +35,7 @@ type
     concepts*: Table[string, ConceptDeclStmt]  # concept name -> definition
     typeMethods*: Table[string, seq[tuple[name: string, paramTypes: seq[string], retType: string]]]
     emittedSpecializations*: seq[string]  # already emitted specializations
-    emittedSeqTypes*: seq[string]  # already emitted Seq specializations
+    emittedSeqTypes*: seq[string]  # already emitted List/array/HT/HS specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
     movedVars*: seq[string]  # variables moved via result = x or mv param
@@ -103,10 +103,10 @@ proc typeToCStr*(g: var CodeGen, t: TypeExpr): string =
     else: n
   elif t of GenericType:
     let gt = GenericType(t)
-    if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
+    if gt.name == "Seq" and gt.args.len == 1 and gt.args[0] of NamedType:
       "iris_view_" & NamedType(gt.args[0]).name
-    elif gt.name == "Seq" and gt.args.len == 1:
-      "iris_Seq_" & g.typeToCStr(gt.args[0])
+    elif gt.name == "List" and gt.args.len == 1:
+      "iris_List_" & g.typeToCStr(gt.args[0])
     elif gt.name == "HashTable" and gt.args.len == 2:
       "iris_HT_" & g.typeToCStr(gt.args[0]) & "__" & g.typeToCStr(gt.args[1])
     elif gt.name == "HashSet" and gt.args.len == 1:
@@ -142,7 +142,7 @@ proc varCType(g: CodeGen, name: string): string =
   g.varTypes.getOrDefault(name, "")
 
 proc isArrayType(ct: string): bool = ct.startsWith("iris_array_")
-proc isSeqType(ct: string): bool = ct.startsWith("iris_Seq_")
+proc isListType(ct: string): bool = ct.startsWith("iris_List_")
 proc isHashTableType(ct: string): bool = ct.startsWith("iris_HT_")
 proc isHashSetType(ct: string): bool = ct.startsWith("iris_HS_")
 
@@ -155,8 +155,8 @@ proc arraySize(ct: string): string =
   let i = ct.rfind('_')
   ct[i+1..^1]
 
-proc seqElemType(ct: string): string =
-  ct[9..^1]  # strip "iris_Seq_"
+proc listElemType(ct: string): string =
+  ct[10..^1]  # strip "iris_List_"
 
 proc htKeyType(ct: string): string =
   let rest = ct[8..^1]  # strip "iris_HT_"
@@ -173,7 +173,7 @@ proc hsElemType(ct: string): string = ct[8..^1]  # strip "iris_HS_"
 proc isClosureType*(ct: string): bool = ct.startsWith("iris_Fn_")
 
 proc isHeapType(ct: string): bool =
-  ct == "iris_String" or ct.isSeqType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_") or ct.isClosureType()
+  ct == "iris_String" or ct.isListType() or ct.isHashTableType() or ct.isHashSetType() or ct.startsWith("iris_Heap_") or ct.isClosureType()
 
 proc needsFree(g: CodeGen, ct: string): bool =
   ## Recursively check if a C type needs freeing (like Rust's Drop)
@@ -187,7 +187,7 @@ proc freeExprStr(g: CodeGen, expr: string, ct: string): string =
   ## Return a C statement that frees expr of type ct
   if ct == "iris_String":
     return "iris_String_free(&" & expr & ");"
-  elif ct.isSeqType():
+  elif ct.isListType():
     return ct & "_free(&" & expr & ");"
   elif ct.isHashTableType():
     return ct & "_free(&" & expr & ");"
@@ -297,8 +297,8 @@ proc cTypeToIris(g: CodeGen, ct: string): string =
   ## Convert C type name back to Iris type name for error messages.
   if ct.isArrayType():
     return "array[" & g.cTypeToIris(arrayElemType(ct)) & ", " & arraySize(ct) & "]"
-  if ct.isSeqType():
-    return "Seq[" & g.cTypeToIris(seqElemType(ct)) & "]"
+  if ct.isListType():
+    return "List[" & g.cTypeToIris(listElemType(ct)) & "]"
   if ct.isHashTableType():
     return "HashTable[" & g.cTypeToIris(htKeyType(ct)) & ", " & g.cTypeToIris(htValType(ct)) & "]"
   if ct.isHashSetType():
@@ -428,7 +428,7 @@ proc inferCType(g: var CodeGen, e: Expr): string =
     let elemT = if s.fillValue != nil: g.inferCType(s.fillValue)
                 elif s.elems.len > 0: g.inferCType(s.elems[0])
                 else: "int64_t"
-    return "iris_Seq_" & elemT
+    return "iris_List_" & elemT
   if e of HashTableLitExpr:
     let ht = HashTableLitExpr(e)
     if ht.entries.len > 0:
@@ -487,9 +487,9 @@ proc inferCType(g: var CodeGen, e: Expr): string =
     if fa.expr of IdentExpr:
       let name = IdentExpr(fa.expr).name
       let varType = g.varCType(name)
-      if fa.field == "len" and (varType.isArrayType() or varType.isSeqType() or varType.isHashTableType() or varType.isHashSetType()):
+      if fa.field == "len" and (varType.isArrayType() or varType.isListType() or varType.isHashTableType() or varType.isHashSetType()):
         return "int64_t"
-      if fa.field == "cap" and (varType.isArrayType() or varType.isSeqType()):
+      if fa.field == "cap" and (varType.isArrayType() or varType.isListType()):
         return "int64_t"
       if name in g.enumNames: return name
       let lookupType = if varType.startsWith("iris_Heap_"): varType[10..^1] else: varType
@@ -502,7 +502,7 @@ proc inferCType(g: var CodeGen, e: Expr): string =
     if idx.expr of IdentExpr:
       let varType = g.varCType(IdentExpr(idx.expr).name)
       if varType.isArrayType(): return arrayElemType(varType)
-      if varType.isSeqType(): return seqElemType(varType)
+      if varType.isListType(): return listElemType(varType)
       if varType.isHashTableType(): return htValType(varType)
   if e of LambdaExpr:
     let lam = LambdaExpr(e)
@@ -733,7 +733,7 @@ proc ensureHeapType(g: var CodeGen, innerType: string) =
       s.add("  " & innerType & "_free(p);\n")
     elif innerType == "iris_String":
       s.add("  free(p->data);\n")
-    elif innerType.isSeqType():
+    elif innerType.isListType():
       s.add("  " & innerType & "_free(p);\n")
     elif innerType.isHashTableType():
       s.add("  " & innerType & "_free(p);\n")
@@ -743,44 +743,44 @@ proc ensureHeapType(g: var CodeGen, innerType: string) =
   s.add("\n")
   g.pendingSpecializations.add(s)
 
-proc ensureSeqType(g: var CodeGen, elemType: string) =
-  let seqType = "iris_Seq_" & elemType
-  if seqType in g.emittedSeqTypes: return
-  g.emittedSeqTypes.add(seqType)
+proc ensureListType(g: var CodeGen, elemType: string) =
+  let listType = "iris_List_" & elemType
+  if listType in g.emittedSeqTypes: return
+  g.emittedSeqTypes.add(listType)
   var s = ""
-  s.add("typedef struct { " & elemType & "* data; size_t len; size_t cap; } " & seqType & ";\n")
+  s.add("typedef struct { " & elemType & "* data; size_t len; size_t cap; } " & listType & ";\n")
   # from N elements
-  s.add("static " & seqType & " " & seqType & "_from(" & elemType & "* arr, size_t n) {\n")
+  s.add("static " & listType & " " & listType & "_from(" & elemType & "* arr, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
   s.add("  for (size_t i = 0; i < n; i++) data[i] = arr[i];\n")
-  s.add("  return (" & seqType & "){data, n, n};\n}\n")
+  s.add("  return (" & listType & "){data, n, n};\n}\n")
   # fill
-  s.add("static " & seqType & " " & seqType & "_fill(" & elemType & " val, size_t n) {\n")
+  s.add("static " & listType & " " & listType & "_fill(" & elemType & " val, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
   s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
-  s.add("  return (" & seqType & "){data, n, n};\n}\n")
+  s.add("  return (" & listType & "){data, n, n};\n}\n")
   # with capacity
-  s.add("static " & seqType & " " & seqType & "_with_cap(size_t cap) {\n")
-  s.add("  return (" & seqType & "){(" & elemType & "*)malloc(cap * sizeof(" & elemType & ")), 0, cap};\n}\n")
+  s.add("static " & listType & " " & listType & "_with_cap(size_t cap) {\n")
+  s.add("  return (" & listType & "){(" & elemType & "*)malloc(cap * sizeof(" & elemType & ")), 0, cap};\n}\n")
   # add
-  s.add("static void " & seqType & "_add(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static void " & listType & "_add(" & listType & "* s, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
   s.add("  }\n  s->data[s->len++] = val;\n}\n")
   # remove (remove at index, preserve order, O(n))
-  s.add("static void " & seqType & "_remove(" & seqType & "* s, size_t i) {\n")
+  s.add("static void " & listType & "_remove(" & listType & "* s, size_t i) {\n")
   s.add("  for (size_t j = i; j < s->len - 1; j++) s->data[j] = s->data[j + 1];\n")
   s.add("  s->len--;\n}\n")
   # removeSwap (remove at index, swap with last, O(1))
-  s.add("static void " & seqType & "_removeSwap(" & seqType & "* s, size_t i) {\n")
+  s.add("static void " & listType & "_removeSwap(" & listType & "* s, size_t i) {\n")
   s.add("  s->data[i] = s->data[s->len - 1];\n")
   s.add("  s->len--;\n}\n")
   # pop (remove and return last)
-  s.add("static " & elemType & " " & seqType & "_pop(" & seqType & "* s) {\n")
+  s.add("static " & elemType & " " & listType & "_pop(" & listType & "* s) {\n")
   s.add("  return s->data[--s->len];\n}\n")
   # insert (insert at index, shift right, O(n))
-  s.add("static void " & seqType & "_insert(" & seqType & "* s, size_t i, " & elemType & " val) {\n")
+  s.add("static void " & listType & "_insert(" & listType & "* s, size_t i, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
@@ -788,20 +788,20 @@ proc ensureSeqType(g: var CodeGen, elemType: string) =
   s.add("  for (size_t j = s->len; j > i; j--) s->data[j] = s->data[j - 1];\n")
   s.add("  s->data[i] = val;\n  s->len++;\n}\n")
   # contains (returns bool)
-  s.add("static bool " & seqType & "_contains(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static bool " & listType & "_contains(" & listType & "* s, " & elemType & " val) {\n")
   s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return true;\n")
   s.add("  return false;\n}\n")
   # find (returns index, -1 if not found)
-  s.add("static int64_t " & seqType & "_find(" & seqType & "* s, " & elemType & " val) {\n")
+  s.add("static int64_t " & listType & "_find(" & listType & "* s, " & elemType & " val) {\n")
   s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
   s.add("  return -1;\n}\n")
   # free
   if g.needsFree(elemType):
-    s.add("static void " & seqType & "_free(" & seqType & "* s) {\n")
+    s.add("static void " & listType & "_free(" & listType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->len; i++) " & g.freeExprStr("s->data[i]", elemType) & "\n")
     s.add("  free(s->data); s->data = NULL; s->len = 0; s->cap = 0;\n}\n\n")
   else:
-    s.add("static void " & seqType & "_free(" & seqType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
+    s.add("static void " & listType & "_free(" & listType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
   g.pendingSpecializations.add(s)
 
 # ── Expression codegen ──
@@ -877,9 +877,9 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
       g.emit("{ " & ct & " iris_echo_tmp = ")
       g.genExpr(e)
       g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data); }")
-    elif ct.isSeqType() and e of IdentExpr:
+    elif ct.isListType() and e of IdentExpr:
       let name = IdentExpr(e).name
-      let elemType = seqElemType(ct)
+      let elemType = listElemType(ct)
       g.emit("{ printf(\"[\"); ")
       g.emit("for (int64_t iris_i = 0; iris_i < " & name & ".len; iris_i++) { ")
       g.emit("if (iris_i > 0) printf(\", \"); ")
@@ -972,11 +972,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let fa = FieldAccessExpr(c.fn)
       if fa.field == "get" and c.args.len == 0:
         g.genExpr(fa.expr); g.emit(".value"); return
-      # Seq methods
+      # List methods
       if fa.expr of IdentExpr:
         let varName = IdentExpr(fa.expr).name
         let varType = g.varCType(varName)
-        if varType.isSeqType():
+        if varType.isListType():
           let addrStr = g.addrOf(varName)
           # .add(x)
           if fa.field == "add" and c.args.len == 1:
@@ -1147,8 +1147,8 @@ proc genExpr(g: var CodeGen, e: Expr) =
                 subs[tn] = concreteType
             elif param.typeAnn of GenericType:
               let gt = GenericType(param.typeAnn)
-              # view[T] → extract inner type
-              if gt.name == "view" and gt.args.len == 1 and gt.args[0] of NamedType:
+              # Seq[T] → extract inner type
+              if gt.name == "Seq" and gt.args.len == 1 and gt.args[0] of NamedType:
                 let inner = NamedType(gt.args[0]).name
                 if gf.genericParams.isGenericParam(inner):
                   # concreteType is iris_view_X → extract X
@@ -1298,10 +1298,10 @@ proc genExpr(g: var CodeGen, e: Expr) =
       if (f.field == "len" or f.field == "cap") and varType.isArrayType():
         g.emit(arraySize(varType)); return
       # .len on Seq → field access
-      if f.field == "len" and varType.isSeqType():
+      if f.field == "len" and varType.isListType():
         g.emit("(int64_t)" & name & acc & "len"); return
       # .cap on Seq → field access
-      if f.field == "cap" and varType.isSeqType():
+      if f.field == "cap" and varType.isListType():
         g.emit("(int64_t)" & name & acc & "cap"); return
       # .len on HashTable/HashSet
       if f.field == "len" and (varType.isHashTableType() or varType.isHashSetType()):
@@ -1341,7 +1341,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
       let varName = IdentExpr(idx.expr).name
       let varType = g.varCType(varName)
       let acc = if varName in g.refVars: "->" else: "."
-      if varType.isSeqType() or varType.isArrayType():
+      if varType.isListType() or varType.isArrayType():
         g.emit(varName & acc & "data["); g.genExpr(idx.index); g.emit("]")
         return
       if varType.isHashTableType():
@@ -1401,22 +1401,22 @@ proc genExpr(g: var CodeGen, e: Expr) =
     let elemType = if s.fillValue != nil: g.inferCType(s.fillValue)
                    elif s.elems.len > 0: g.inferCType(s.elems[0])
                    else: "int64_t"
-    let seqType = "iris_Seq_" & elemType
-    g.ensureSeqType(elemType)
+    let listType = "iris_List_" & elemType
+    g.ensureListType(elemType)
     if s.capacityOnly:
-      g.emit(seqType & "_with_cap(")
+      g.emit(listType & "_with_cap(")
       g.genExpr(s.fillCount)
       g.emit(")")
     elif s.fillValue != nil:
-      g.emit(seqType & "_fill(")
+      g.emit(listType & "_fill(")
       g.genExpr(s.fillValue)
       g.emit(", ")
       g.genExpr(s.fillCount)
       g.emit(")")
     elif s.elems.len == 0:
-      g.emit("(" & seqType & "){NULL, 0, 0}")
+      g.emit("(" & listType & "){NULL, 0, 0}")
     else:
-      g.emit(seqType & "_from((" & elemType & "[]){")
+      g.emit(listType & "_from((" & elemType & "[]){")
       for i, el in s.elems:
         if i > 0: g.emit(", ")
         g.genExpr(el)
@@ -1700,8 +1700,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           "' — expected '" & g.cTypeToIris(ctype) &
           "', got '" & g.cTypeToIris(valType) & "'")
     # Ensure runtime types are emitted
-    if ctype.isSeqType():
-      g.ensureSeqType(seqElemType(ctype))
+    if ctype.isListType():
+      g.ensureListType(listElemType(ctype))
     if ctype.isArrayType():
       g.ensureArrayType(arrayElemType(ctype), arraySize(ctype))
     if ctype.isHashTableType():
@@ -2135,8 +2135,8 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let iterName = IdentExpr(f.iter).name
       let iterType = g.varCType(iterName)
       let idx = "iris_i_" & f.varName
-      if iterType.isSeqType():
-        let elemT = seqElemType(iterType)
+      if iterType.isListType():
+        let elemT = listElemType(iterType)
         g.varTypes[f.varName] = elemT
         g.emitIndent()
         g.emit("for (size_t " & idx & " = 0; " & idx & " < " & iterName & ".len; " & idx & "++) {\n")
@@ -2226,9 +2226,9 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ObjectDeclStmt:
     let o = ObjectDeclStmt(s)
-    # Check: view[T] not allowed in object fields (including variant fields)
+    # Check: Seq[T] not allowed in object fields (including variant fields)
     for f in o.fields:
-      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "Seq":
         raise newException(ValueError,
           "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
           " cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
@@ -2236,7 +2236,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
     if o.variant.tagName.len > 0:
       for b in o.variant.branches:
         for f in b.fields:
-          if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+          if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "Seq":
             raise newException(ValueError,
               "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
               " cannot be stored in object fields — use 'str' (static) or 'String' (owned) instead" &
@@ -2291,9 +2291,9 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
 
   elif s of ErrorDeclStmt:
     let e = ErrorDeclStmt(s)
-    # Check: view[T] not allowed in error fields
+    # Check: Seq[T] not allowed in error fields
     for f in e.fields:
-      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "view":
+      if f.typeAnn of GenericType and GenericType(f.typeAnn).name == "Seq":
         raise newException(ValueError,
           "error: " & g.cTypeToIris(g.typeToCStr(f.typeAnn)) &
           " cannot be stored in error fields — use 'str' (static) or 'String' (owned) instead" &
@@ -2561,19 +2561,19 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
   for name in typesNeedingFree:
     g.emitStructFree(name)
 
-  # Pre-emit Seq/array types referenced in function signatures
+  # Pre-emit List/array types referenced in function signatures
   for s in stmts:
     if s of FnDeclStmt:
       let f = FnDeclStmt(s)
       if f.returnType != nil:
         let rt = g.typeToCStr(f.returnType)
-        if rt.isSeqType(): g.ensureSeqType(seqElemType(rt))
+        if rt.isListType(): g.ensureListType(listElemType(rt))
         if rt.isArrayType(): g.ensureArrayType(arrayElemType(rt), arraySize(rt))
         if rt.isHashTableType(): g.ensureHashTableType(htKeyType(rt), htValType(rt))
         if rt.isHashSetType(): g.ensureHashSetType(hsElemType(rt))
       for p in f.params:
         let pt = g.typeToCStr(p.typeAnn)
-        if pt.isSeqType(): g.ensureSeqType(seqElemType(pt))
+        if pt.isListType(): g.ensureListType(listElemType(pt))
         if pt.isArrayType(): g.ensureArrayType(arrayElemType(pt), arraySize(pt))
         if pt.isHashTableType(): g.ensureHashTableType(htKeyType(pt), htValType(pt))
         if pt.isHashSetType(): g.ensureHashSetType(hsElemType(pt))

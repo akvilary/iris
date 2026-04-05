@@ -1,0 +1,4 @@
+# EXPECT ERROR: view cannot be stored in fields
+@Bad object:
+  @name str
+  @data view[int]

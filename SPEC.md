@@ -394,7 +394,7 @@ export myLib.internal.parser
 Arguments can be passed by name using `=`. Order doesn't matter for named arguments:
 
 ```
-@createUser! func(@name view[String], @age int) ok User:
+@createUser! func(@name String, @age int) ok User:
   result = User(name=name, age=age)
 
 # Positional (by order):
@@ -450,14 +450,14 @@ Return value is set explicitly:
     result = String("zero")
 
 # result can be set early and execution continues:
-@process! func(@data view[byte]) ok int:
+@process! func(@data Seq[byte]) ok int:
   result = 0
   for b in data:
     result = result + b.toInt()
   log("sum computed")    # runs after, result already set
 
 # return — early exit (uses current result value):
-@search! func(@list view[int], @target int) ok int:
+@search! func(@list Seq[int], @target int) ok int:
   result = -1
   for i, val in list:
     if val == target:
@@ -473,16 +473,16 @@ Compiler verifies that `result` is set on all execution paths.
 Use `mv` to move a local variable into `result`, or assign an rvalue directly:
 
 ```
-@makeNums func() ok Seq[int]:
+@makeNums func() ok List[int]:
   @nums mut = ~[1, 2, 3]
   nums.add(4)
   result = mv nums            # ownership moves to result, nums is now invalid
                               # nums is NOT freed — caller owns the data
 
-@makeDirect func() ok Seq[int]:
+@makeDirect func() ok List[int]:
   result = ~[1, 2, 3]        # rvalue — ownership, no intermediate
 
-@process func() ok Seq[int]:
+@process func() ok List[int]:
   @temp mut = ~[10, 20]
   @other mut = ~[30, 40]     # other is NOT moved to result
   result = mv temp            # temp moved to result
@@ -537,7 +537,7 @@ The compiler verifies all of this automatically.
 **Stack by default.** All primitives and objects are value types on the stack.
 No `ref object` — only `object`. Like Rust, not like Go or Java.
 
-**Heap only explicitly** — via `Pool`, `Heap[T]`, or heap-owning types (`String`, `Seq`, etc.).
+**Heap only explicitly** — via `Pool`, `Heap[T]`, or heap-owning types (`String`, `List`, etc.).
 
 #### Allocation table — every type, no exceptions
 
@@ -550,17 +550,18 @@ No `ref object` — only `object`. Like Rust, not like Go or Java.
 | `rune` | Stack | 4 bytes | Unicode code point |
 | `natural` | Stack | 8 bytes | Non-negative integer |
 | `str` | Stack | 16 bytes | Static string reference (`.rodata`) |
-| `view[String]` | Stack | 16 bytes | Immutable view (pointer + length) |
 | `array[T, N]` | Stack | `N * sizeof(T)` | Fixed size, known at compile time |
+| `Seq[T]` | Depends | Varies | Sequence — either `array[T, N]` (stack) or `List[T]` (heap) |
+| `view[T]` | Stack | 16 bytes | Borrowed slice (pointer + length). Cannot be stored in fields or closures |
 | Custom objects | Stack | Sum of fields | `@User object:` → stack |
 | `String` | **Heap** | Unlimited | Owned heap buffer (ptr+len+cap=24 bytes on stack) |
-| `Seq[T]` | **Heap** | Unlimited | Like Rust's `Vec<T>`. Metadata on stack |
+| `List[T]` | **Heap** | Unlimited | Like Rust's `Vec<T>`. Metadata on stack |
 | `HashTable[K,V]` | **Heap** | Unlimited | Like Rust's `HashMap`. Metadata on stack |
 | `HashSet[T]` | **Heap** | Unlimited | Like Rust's `HashSet`. Metadata on stack |
 | `Heap[T]` | **Heap** | Unlimited | Like Rust's `Box<T>`. Pointer (8 bytes) on stack |
 | `Pool` allocations | **Heap** | Unlimited | `pool.alloc(...)` — explicit arena heap |
 
-Heap types (`String`, `Seq`, `HashTable`, `HashSet`, `Heap[T]`) own their heap data
+Heap types (`String`, `List`, `HashTable`, `HashSet`, `Heap[T]`) own their heap data
 and free it when they go out of scope. The metadata (pointer, length, capacity)
 lives on the stack — only the data is in heap. This is explicit:
 **you choose a heap type, you know it allocates.**
@@ -574,7 +575,7 @@ lives on the stack — only the data is in heap. This is explicit:
 
 # Heap — explicit, you chose a heap type
 @buf mut String = ~""                            # buffer in heap
-@list mut Seq[int] = ~[]                      # buffer in heap
+@list mut List[int] = ~[]                      # buffer in heap
 @map mut HashTable[str, int] = ~{"key": 1}       # buffer in heap
 @ids HashSet[int] = ~{1, 2, 3}               # buffer in heap
 @user Heap[User] = ~User(name=~"Andrey")      # object in heap
@@ -593,7 +594,7 @@ lives on the stack — only the data is in heap. This is explicit:
 | `"hello"` | `str` | Stack — static reference to `.rodata` |
 | `~"hello"` | `String` | Heap — owned string |
 | `[1, 2, 3]` | `array[int, 3]` | Stack — fixed array |
-| `~[1, 2, 3]` | `Seq[int]` | Heap — dynamic sequence |
+| `~[1, 2, 3]` | `List[int]` | Heap — dynamic list |
 | `~{"k": 1}` | `HashTable[str, int]` | Heap — hash table |
 | `~{1, 2, 3}` | `HashSet[int]` | Heap — hash set |
 | `User(...)` | `User` | Stack — object |
@@ -617,10 +618,10 @@ No `&` in the language — the compiler handles it.
 | `@param mv Type` | Takes ownership (move) |
 
 ```
-@length func(@s view[String]) ok int:          # immutable ref (auto)
+@length func(@s String) ok int:                # immutable ref (auto)
   result = s.len
 
-@sort func(@list mut view[int]):     # mutable ref — can modify caller's data
+@sort func(@list mut Seq[int]):      # mutable ref — can modify caller's data
   ...
 
 @send func(@msg mv Message):          # takes ownership — caller can't use msg after
@@ -673,15 +674,15 @@ No annotations needed. Compiler applies simple rules:
 
 ```
 # Rule 1 — owned return, no concern:
-@length func(@s view[String]) ok int:
+@length func(@s String) ok int:
   result = s.len
 
 # Rule 2 — one borrow param, obvious:
-@firstWord func(@s view[String]) ok view[String]:
+@firstWord func(@s String) ok String:
   result = s.split(" ")[0]       # tied to s
 
 # Rule 3 — multiple borrows, tied to all:
-@longest func(@x view[String], @y view[String]) ok view[String]:
+@longest func(@x String, @y String) ok String:
   result = x if x.len > y.len else y
   # compiler: result tied to both x AND y
 
@@ -728,14 +729,14 @@ behind a uniform pointer):
   @draw func(@self)
 
 # Circle (8 bytes) and Rect (16 bytes) — different sizes.
-# Heap[Drawable] is always 8 bytes (pointer), so Seq can store both:
-@shapes Seq[Heap[Drawable]] = ~[~Circle(r=5), ~Rect(w=3, h=4)]
+# Heap[Drawable] is always 8 bytes (pointer), so List can store both:
+@shapes List[Heap[Drawable]] = ~[~Circle(r=5), ~Rect(w=3, h=4)]
 
 for @shape in shapes:
   shape.draw()                # auto-deref, calls correct draw()
 ```
 
-`Heap[T]` auto-converts to `view[T]` (zero-cost, like `String` → `view[String]`).
+`Heap[T]` auto-derefs to `T` (zero-cost).
 
 #### Heap[T] and function parameters
 
@@ -768,7 +769,7 @@ consume(heap)   # ownership of heap transferred, freed at scope end
 
 `Heap[T]` in type annotations is only needed for:
 - **Variable annotation** (optional): `@user Heap[User] = ~User(...)`
-- **Heterogeneous collections**: `Seq[Heap[Drawable]]`
+- **Heterogeneous collections**: `List[Heap[Drawable]]`
 
 #### Stack size warning
 
@@ -830,7 +831,7 @@ process(buf)
 
 # Regular code — no pool needed:
 @buildList func() ok String:
-  @items mut = newSeq[Item]()
+  @items mut = List[Item]()
   items.add(Item("first"))
   items.add(Item("second"))     # items owns the data, no cycles
   result = items.toString()
@@ -894,13 +895,13 @@ processRoles(roles)
 
 ## Collections
 
-### Arrays, Sequences, Slices
+### Arrays, Lists, Sequences
 
 | Syntax | What | Storage | Size |
 |--------|------|---------|------|
 | `array[int, 5]` | Fixed-size array | Stack (inline) | Known at compile-time |
-| `Seq[int]` | Dynamic sequence | Heap | Grows at runtime |
-| `view[int]` | View (parameters only) | Reference to existing data | Pointer + length |
+| `List[int]` | Dynamic list | Heap | Grows at runtime |
+| `Seq[int]` | Sequence | Stack or heap | Either `array[T, N]` or `List[T]` |
 
 ```
 # Fixed array — stack
@@ -909,32 +910,61 @@ processRoles(roles)
 # Fill syntax — [value: count]
 @zeros array[int, 100] = [0: 100]       # 100 zeros
 
-# Dynamic sequence — heap, created with ~[...]
+# Dynamic list — heap, created with ~[...]
 @dynamic mut = ~[1, 2, 3]
 dynamic.add(4)
 
 # Explicit type annotation also works
-@other mut Seq[int] = ~[10, 20, 30]
+@other mut List[int] = ~[10, 20, 30]
 
-# Fill syntax for Seq — ~[value: count]
-@filled mut Seq[int] = ~[0: 100]        # Seq with 100 zeros
+# Fill syntax for List — ~[value: count]
+@filled mut List[int] = ~[0: 100]        # List with 100 zeros
 
-# Empty Seq with pre-allocated capacity — ~[:capacity]
-@reserved mut Seq[int] = ~[:100]         # len=0, capacity=100
+# Empty List with pre-allocated capacity — ~[:capacity]
+@reserved mut List[int] = ~[:100]         # len=0, capacity=100
 reserved.add(42)                          # no reallocation needed
 # reserved[0] before add → runtime error: index out of bounds
 
-# Empty Seq
-@empty mut = Seq[int]()
+# Empty List
+@empty mut = List[int]()
 
-# View — accepts both array and Seq
-@sum func(@arr view[int]) ok int:
+# Seq — accepts both array and List
+@sum func(@arr Seq[int]) ok int:
   result = 0
   for @x in arr:
     result = result + x
 
-sum(fixed)      # OK — view into stack array
-sum(dynamic)    # OK — view into Seq
+sum(fixed)      # OK — Seq from stack array
+sum(dynamic)    # OK — Seq from List
+```
+
+### view[T] — borrowed slice
+
+`view[T]` is a borrowed slice into a sequence (pointer + length). Like Rust's `&[T]`.
+Created by slicing an array, List, or Seq.
+
+```
+@nums = [1, 2, 3, 4, 5]
+@slice view[int] = nums[1..3]     # view into elements 1, 2, 3
+
+@dynamic mut = ~[10, 20, 30, 40]
+@part view[int] = dynamic[0..<2]  # view into elements 10, 20
+```
+
+**Restrictions** — `view[T]` is a borrowed reference that may dangle:
+- Cannot be stored in object, error, or tuple fields
+- Cannot be captured in closures
+- Cannot outlive the source data
+
+```
+# ERROR — view in object field:
+@Bad object:
+  @data view[int]    # compile error: view cannot be stored in fields
+
+# ERROR — view in closure:
+@nums = [1, 2, 3]
+@slice view[int] = nums[0..1]
+@f = mv func() ok int as slice[0]  # compile error: view cannot be captured
 ```
 
 ### HashTable
@@ -955,7 +985,7 @@ Inline hash table literal with `~{key: value}`:
 @empty = HashTable[str, int]()
 ```
 
-Key type must be owned — `view[T]` is not allowed as a hash table key
+Key type must be owned — `Seq[T]` is not allowed as a hash table key
 (it borrows data with a limited lifetime, but keys are stored long-term).
 
 ### HashSet
@@ -1086,12 +1116,11 @@ case a:
 
 ## Strings
 
-Three string types — explicit about where data lives:
+Two string types — explicit about where data lives:
 
 | Type | What | Size on stack | Mutability |
 |------|------|---------------|------------|
 | `str` | Static string reference (`.rodata`) | 16 bytes (64-bit) | Immutable |
-| `view[String]` | Immutable view (pointer + length) | 16 bytes (64-bit) | Immutable |
 | `String` | Owned heap buffer | 24 bytes (64-bit) | Mutable, growable |
 
 - UTF-8 by default.
@@ -1100,17 +1129,11 @@ Three string types — explicit about where data lives:
   Points only to string literals embedded in the binary (`.rodata`).
   Lives forever — safe to store in object fields. `"hello"` has type `str`.
   `str mut` is a compile error — `.rodata` is read-only, mutation is impossible.
-- `view[String]` — a **borrowed view**: `(const char* data, size_t len)`.
-  Same layout as `str`, but may point to heap data (`String` buffer).
-  Does not own data, does not allocate. Restricted to parameters,
-  local variables, and return values — cannot be stored in object fields.
 - `String` — an **owned heap buffer**: `(char* data, size_t len, size_t cap)`.
   Growable, mutable. Use for dynamic text: file contents, network data,
   building strings. Freed automatically at scope end.
-- `str` auto-converts to `view[String]` (zero-cost, same layout).
-- `String` auto-converts to `view[String]` when passed where `view[String]` is expected.
-  Zero-cost — just takes pointer and length.
-- Concatenation: `view[String] + view[String]` → `String`, `String + view[String]` → `String`.
+- Function parameters taking `String` accept both `str` and `String`.
+- Concatenation: `str + str` → `String`, `String + str` → `String`.
 - Interpolation: `"hello {name}"` — built into lexer, works everywhere.
 
 #### Where each type can be used
@@ -1118,12 +1141,7 @@ Three string types — explicit about where data lives:
 | Type | Parameters | Local vars | Return values | Object fields | Closures |
 |------|-----------|------------|---------------|---------------|----------|
 | `str` | yes | yes | yes | **yes** | yes |
-| `view[String]` | yes | yes | yes | **no** | no |
 | `String` | yes | yes | yes | **yes** | yes |
-
-`view[String]` cannot be stored in object fields or closures — it borrows
-data that may be freed. Use `str` (static) or `String` (owned) instead.
-No lifetime annotations needed — types enforce safety.
 
 #### Memory layout
 
@@ -1137,15 +1155,6 @@ str (16 bytes on 64-bit):
        ▼
   .rodata in binary (lives forever)
 
-view[String] (16 bytes on 64-bit):
-┌──────────────┬──────────────┐
-│ const char*  │  size_t len  │
-│   (8 bytes)  │   (8 bytes)  │
-└──────┬───────┴──────────────┘
-       │
-       ▼
-  data stored elsewhere (.rodata, String heap buffer, ...)
-
 String (24 bytes on 64-bit):
 ┌──────────────┬──────────────┬──────────────┐
 │   char*      │  size_t len  │  size_t cap  │
@@ -1156,14 +1165,10 @@ String (24 bytes on 64-bit):
   heap-allocated buffer (owned, freed at scope end)
 ```
 
-`str` and `view[String]` have identical layout — `str` auto-converts to
-`view[String]` at zero cost. The difference is semantic: `str` guarantees
-static lifetime, `view[String]` may borrow from heap.
-
 #### Safety — borrow checker
 
-`view[String]` is a borrow — the borrow checker guarantees it never outlives
-the data it points to. No dangling pointers, no use-after-free:
+The borrow checker guarantees references never outlive
+the data they point to. No dangling pointers, no use-after-free:
 
 ```
 # OK — literal lives forever, str type
@@ -1171,17 +1176,18 @@ the data it points to. No dangling pointers, no use-after-free:
   result = "hello"
 
 # OK — result lifetime tied to parameter (rule 2)
-@first_word func(@s view[String]) ok view[String]:
+@first_word func(@s String) ok String:
   result = s.split(" ")[0]
 
 # OK — both params, result tied to both (rule 3)
-@longest func(@x view[String], @y view[String]) ok view[String]:
+@longest func(@x String, @y String) ok String:
   result = x if x.len > y.len else y
 
-# COMPILE ERROR — local String dies, view would dangle
-@bad func() ok view[String]:
+# COMPILE ERROR — returning reference to local
+@bad func() ok String:
   @s String = ~"hello"
-  return s              # error: view borrows from s, which is dropped here
+  result = s              # error: cannot return reference to local variable
+                          # use: result = mv s
 ```
 
 #### Creating strings
@@ -1207,17 +1213,16 @@ the data it points to. No dangling pointers, no use-after-free:
 #### Usage
 
 ```
-@greet func(@s view[String]):                  # accepts view (16 bytes)
+@greet func(@s String):                        # accepts both str and String
   *echo(s)
 
-greet(name)                           # str → view[String], auto-convert (zero-cost)
-greet(buf)                            # String → view[String], auto-convert (zero-cost)
+greet(name)                           # str auto-converts (zero-cost)
+greet(buf)                            # String passed directly
 
 # For large/dynamic text — use String (heap)
 @buf mut String = String()
 buf.append("part1")
 buf.append("part2")
-@v view[String] = buf                       # view into buf's heap data
 
 @big String = readFile("big.txt")    # heap, no size limit
 ```
@@ -1409,20 +1414,20 @@ No `impl` needed — if a type fits, it automatically satisfies the concept.
 
 @Serializable concept:
   @toJson func(@self) ok String
-  @fromJson func(@raw view[String]) ok Self
+  @fromJson func(@raw String) ok Self
 ```
 
 Usage is **optional**, for documentation and better compiler errors:
 
 ```
 # With concept — better error messages:
-@sort func[T: Comparable](@list mut view[T]):
+@sort func[T: Comparable](@list mut Seq[T]):
   ...
 # error: type Socket does not satisfy concept Comparable
 #   missing: @lessThan func(@self, @other Socket) ok bool
 
 # Without concept — also works, duck typing at call site:
-@sort func[T](@list mut view[T]):
+@sort func[T](@list mut Seq[T]):
   ...
 # error: type Socket has no method 'lessThan'
 #   called from sort() at main.is:10
@@ -1445,12 +1450,12 @@ A type automatically satisfies a concept if it has the required methods:
 ### Generics
 
 ```
-@map func[T, U](@list view[T], @f func(T) ok U) ok Seq[U]:
+@map func[T, U](@list Seq[T], @f func(T) ok U) ok List[U]:
   for @x in list:
     result.add(f(x))
 
 # With concept constraint (optional):
-@printAll func[T: Printable](@items view[T]):
+@printAll func[T: Printable](@items Seq[T]):
   for @item in items:
     *echo(item.toString())
 ```
@@ -1477,14 +1482,14 @@ Called with `*` prefix. Hygienic by default.
 
 ```
 # Simple macro — typed params, value substitution
-@log macro(@msg view[String]):
+@log macro(@msg String):
   *echo("[LOG] ", msg)
 
 *log("server started")
 # → *echo("[LOG] ", "server started")
 
 # Code macro — untyped param, AST expansion
-@benchmark macro(@label view[String], @body):
+@benchmark macro(@label String, @body):
   @start = clock()
   ast.expand(body)
   *echo(label, ": ", clock() - start)
@@ -1562,7 +1567,7 @@ Compiler ensures safe access to variant fields at compile time.
 Works with both regular objects and object variants:
 
 ```
-@derive macro(@trait view[String], @body):
+@derive macro(@trait String, @body):
   ast.expand(body)
 
   if trait == "Eq":
@@ -1702,7 +1707,7 @@ if a and b:
 
 # spawn is available via block handle
 @pipeline block:
-  @ch = channel[view[String]](10)
+  @ch = channel[String](10)
 
   @urls_loop for @url in urls:
     @data = spawn fetch(url)
@@ -1768,7 +1773,7 @@ No unbounded channels — always explicit size to prevent memory leaks.
 @val = ch.receive()      # blocks until value available
 
 # Ownership transfer — sender loses access:
-@ch = channel[Seq[int]](1)
+@ch = channel[List[int]](1)
 @data mut = ~[1, 2, 3]
 ch.send(data)           # data MOVED into channel
 # *echo(data)            # ERROR: data was moved
@@ -1818,7 +1823,7 @@ Iris has **no async/await**. All functions are the same:
 
 ```
 # Regular function. IO inside — but syntax is the same.
-@fetch func(@url view[String]) ok bytes else NetError:
+@fetch func(@url String) ok bytes else NetError:
   @resp = http.get(url)?
   result = resp.body()
 
@@ -1923,7 +1928,7 @@ The compiler distinguishes by type — `error` types vs regular values:
     return                 # early exit with error
   result = a / b           # compiler wraps in ok
 
-@readConfig! func(@path view[String]) ok Config else IoError, ParseError:
+@readConfig! func(@path String) ok Config else IoError, ParseError:
   @raw = fs.read(path)?              # ? propagates IoError up
   @parsed = json.parse(raw)?         # ? propagates ParseError up
   result = Config.from(parsed)       # compiler wraps in ok

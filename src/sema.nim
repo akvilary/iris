@@ -2,7 +2,7 @@
 ## Runs between parser and codegen.
 ##
 ## Current checks:
-##   - view[T] cannot be stored in object/error/tuple fields (dangling reference)
+##   - Seq[T] cannot be stored in object/error/tuple fields (dangling reference)
 ##   - variables declared without init must be assigned on all paths before use
 ##   - undeclared variables cannot be used
 ##
@@ -16,7 +16,7 @@ type
     name: string
     modifier: DeclModifier
     typeAnn: TypeExpr
-    isHeap: bool  # true for String, Seq, HashTable, HashSet
+    isHeap: bool  # true for String, List, HashTable, HashSet
     isRef: bool       # true if this variable is a reference to another
     isMutRef: bool    # true if this is a mutable reference
     refSource: string # name of the source variable (if isRef)
@@ -35,7 +35,7 @@ type
     immBorrows: Table[string, int]    # source var -> count of immutable refs
     mutBorrow: Table[string, string]  # source var -> name of mutable ref holder
     fnParamMods: Table[string, seq[ParamModifier]]  # func name -> param modifiers
-    currentFnReturnsBorrow: bool  # true if current function returns view/str
+    currentFnReturnsBorrow: bool  # true if current function returns Seq/str
     currentFnReturnType: TypeExpr  # current function's return type
     currentFnBorrowParams: HashSet[string]  # borrow param names in current function
     guardedVars: HashSet[string]  # Option/Result vars checked by if/case (valid for ^)
@@ -108,7 +108,7 @@ proc isInitialized(ctx: SemaContext, name: string): bool =
 # ── Type checks ──
 
 proc isViewType(t: TypeExpr): bool =
-  ## Check if type is view[T]
+  ## Check if type is view[T] — a borrowed slice that cannot be stored
   if t == nil: return false
   if t of GenericType:
     return GenericType(t).name == "view"
@@ -133,7 +133,7 @@ proc isHeapTypeAnn(t: TypeExpr): bool =
     return NamedType(t).name == "String"
   if t of GenericType:
     let name = GenericType(t).name
-    return name in ["Seq", "HashTable", "HashSet", "Heap"]
+    return name in ["List", "HashTable", "HashSet", "Heap"]
   return false
 
 proc isCopyType(t: TypeExpr): bool =
@@ -177,12 +177,10 @@ proc inferType(ctx: SemaContext, e: Expr): TypeExpr =
   return nil
 
 proc isBorrowType(t: TypeExpr): bool =
-  ## Check if return type is a borrow (view[T] or str)
+  ## Check if return type is a borrow (str)
   if t == nil: return false
   if t of NamedType:
     return NamedType(t).name == "str"
-  if t of GenericType:
-    return GenericType(t).name == "view"
   return false
 
 proc isStrType(t: TypeExpr): bool =
@@ -193,13 +191,13 @@ proc isStrType(t: TypeExpr): bool =
   return false
 
 proc checkFieldsNoView(ctx: var SemaContext, typeName: string, fields: seq[TypeField]) =
-  ## Reject view[T] in struct/object fields — views are borrowed references
+  ## Reject view[T] in struct/object fields — views are borrowed slices
   ## that may dangle if stored.
   for f in fields:
     if isViewType(f.typeAnn):
       ctx.error("error: field '" & f.name & "' in '" & typeName &
         "' has type " & typeToStr(f.typeAnn) &
-        " — views cannot be stored in fields (borrowed reference may dangle)")
+        " — view cannot be stored in fields (borrowed slice may dangle)")
 
 proc checkVariantFieldsNoView(ctx: var SemaContext, typeName: string, variant: ObjectVariant) =
   if variant.tagName.len == 0: return
@@ -208,7 +206,7 @@ proc checkVariantFieldsNoView(ctx: var SemaContext, typeName: string, variant: O
       if isViewType(f.typeAnn):
         ctx.error("error: variant field '" & f.name & "' in '" & typeName &
           "' has type " & typeToStr(f.typeAnn) &
-          " — views cannot be stored in fields (borrowed reference may dangle)")
+          " — view cannot be stored in fields (borrowed slice may dangle)")
 
 # ── AST walking ──
 
@@ -234,11 +232,11 @@ proc analyzeExpr(ctx: var SemaContext, e: Expr) =
         if varDepth >= 0 and varDepth < ctx.fnScopeDepth:
           # Variable from outer function scope — it's a capture
           let info = ctx.lookupVarInfo(name)
-          # Check: view types cannot be captured
+          # Check: view types cannot be captured (borrowed slice may dangle)
           if isViewType(info.typeAnn):
             ctx.error("error: cannot capture '" & name & "' — view types cannot be stored in closures")
+          # Add to captures (avoid duplicates)
           else:
-            # Add to captures (avoid duplicates)
             var alreadyCaptured = false
             for cap in ctx.currentCaptures[]:
               if cap.name == name:
@@ -532,7 +530,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
     # Partial move check: cannot move a field/element out of a struct/collection
     if isPartialMove(rs.value):
       ctx.error("error: cannot move field out of struct — move the whole value or copy it")
-    # Type check: owned type cannot be returned as view/str
+    # Type check: owned type cannot be returned as Seq/str
     if ctx.currentFnReturnsBorrow and rs.value of IdentExpr:
       let srcName = IdentExpr(rs.value).name
       if srcName != "result":
@@ -544,7 +542,7 @@ proc analyzeStmt(ctx: var SemaContext, s: Stmt) =
               typeToStr(srcInfo.typeAnn))
           else:
             ctx.error("error: cannot return '" & srcName &
-              "' — it is a view of local data that will be freed")
+              "' — it is a Seq of local data that will be freed")
     # result = variable requires mv for non-copy types
     if rs.value of IdentExpr:
       let srcName = IdentExpr(rs.value).name
