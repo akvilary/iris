@@ -1,0 +1,13 @@
+# std/time — Time and Duration for Iris
+# Duration is measured in nanoseconds (int64)
+
+@Duration! object:
+  @ns int
+
+# Duration constants — multiply with int: 5 * time.Second
+@Nanosecond!  const = Duration(ns=1)
+@Microsecond! const = Duration(ns=1000)
+@Millisecond! const = Duration(ns=1000000)
+@Second!      const = Duration(ns=1000000000)
+@Minute!      const = Duration(ns=60000000000)
+@Hour!        const = Duration(ns=3600000000000)

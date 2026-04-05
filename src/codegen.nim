@@ -16,7 +16,7 @@ type
   CodeGen* = object
     output*: string
     indent*: int
-    varTypes: Table[string, string]
+    varTypes*: Table[string, string]
     typeFields: Table[string, seq[tuple[name, ctype: string]]]
     enumNames: seq[string]
     errorNames: seq[string]
@@ -377,7 +377,7 @@ proc formatParams*(g: var CodeGen, params: seq[Param]): string =
     parts.add(g.formatParam(p))
   parts.join(", ")
 
-proc inferCType(g: var CodeGen, e: Expr): string
+proc inferCType*(g: var CodeGen, e: Expr): string
 
 proc printfFormat(g: var CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] =
   if e of StringLitExpr: return ("%s", false)
@@ -415,7 +415,7 @@ proc printfFormat(g: var CodeGen, e: Expr): tuple[fmt: string, needsCast: bool] 
   of "double", "float": return ("%g", false)
   else: return ("%lld", true)
 
-proc inferCType(g: var CodeGen, e: Expr): string =
+proc inferCType*(g: var CodeGen, e: Expr): string =
   if e of IntLitExpr: return "int64_t"
   if e of FloatLitExpr: return "double"
   if e of StringLitExpr: return "iris_str"
@@ -497,6 +497,11 @@ proc inferCType(g: var CodeGen, e: Expr): string =
     let fa = FieldAccessExpr(e)
     if fa.expr of IdentExpr:
       let name = IdentExpr(fa.expr).name
+      # Module access: time.Second → look up std_time_Second type
+      if name in g.importedModules:
+        let prefix = g.nameAliases.getOrDefault("iris_mod_" & name, name)
+        let cname = prefix & "_" & fa.field
+        if cname in g.varTypes: return g.varTypes[cname]
       let varType = g.varCType(name)
       if fa.field == "len" and (varType.isArrayType() or varType.isListType() or varType.isHashTableType() or varType.isHashSetType()):
         return "int64_t"
@@ -2784,6 +2789,21 @@ proc generateModule*(g: var CodeGen, stmts: seq[Stmt], modName: string): string 
       let ret = if f.returnType != nil: g.typeToCStr(f.returnType) else: "void"
       g.emit(ret & " " & cname & "(" & g.formatParams(f.params) & ");\n")
       g.fnReturnTypes[cname] = ret
+  g.emit("\n")
+
+  # Public constants — prefixed
+  for s in stmts:
+    if s of DeclStmt:
+      let d = DeclStmt(s)
+      if not d.public: continue
+      let ctype = if d.typeAnn != nil: g.typeToCStr(d.typeAnn)
+                  elif d.value != nil: g.inferCType(d.value)
+                  else: "int64_t"
+      let cname = prefix & "_" & d.name
+      g.varTypes[d.name] = ctype
+      g.emit("const " & ctype & " " & cname & " = ")
+      g.genExpr(d.value)
+      g.emit(";\n")
   g.emit("\n")
 
   # Functions — public get prefixed, private get static

@@ -26,10 +26,15 @@ type
 proc resolveModule(result: var Table[string, ImportInfo], modName: string,
                    fromNames: seq[string], baseDir: string) =
   if modName in result: return
-  # Module path: "mymath" → "mymath.is", "std/io" → "std/io.is"
-  let modPath = baseDir / modName & ".is"
-  if not fileExists(modPath):
-    raise newException(ValueError, "error: module '" & modName & "' not found (" & modPath & ")")
+  # Search order: 1) relative to source file, 2) src/ next to compiler (stdlib)
+  let localPath = baseDir / modName & ".is"
+  let compilerDir = getAppDir()
+  let stdlibPath = compilerDir / "src" / modName & ".is"
+  let modPath = if fileExists(localPath): localPath
+                elif fileExists(stdlibPath): stdlibPath
+                else:
+                  raise newException(ValueError, "error: module '" & modName & "' not found (" & localPath & ")")
+                  ""
   let modSource = readFile(modPath)
   result[modName] = ImportInfo(stmts: compileToAst(modSource), fromNames: fromNames)
 
@@ -99,7 +104,7 @@ proc compileToC(source: string, baseDir: string, filename: string = ""): string 
     for s in info.stmts:
       if s of ObjectDeclStmt or s of EnumDeclStmt or s of TupleDeclStmt:
         gen.genStmt(s); gen.emit("\n")
-    # Extern declarations for public functions
+    # Extern declarations for public functions and constants
     let prefix = sanitizeModName(modName)
     for s in info.stmts:
       if s of FnDeclStmt:
@@ -109,6 +114,15 @@ proc compileToC(source: string, baseDir: string, filename: string = ""): string 
         let ret = if f.returnType != nil: gen.typeToCStr(f.returnType) else: "void"
         gen.emit("extern " & ret & " " & cname & "(" & gen.formatParams(f.params) & ");\n")
         gen.fnReturnTypes[cname] = ret
+      if s of DeclStmt:
+        let d = DeclStmt(s)
+        if not d.public: continue
+        let ctype = if d.typeAnn != nil: gen.typeToCStr(d.typeAnn)
+                    elif d.value != nil: gen.inferCType(d.value)
+                    else: "int64_t"
+        let cname = prefix & "_" & d.name
+        gen.emit("extern const " & ctype & " " & cname & ";\n")
+        gen.varTypes[cname] = ctype
     gen.emit("\n")
 
   # Now generate main module (types, functions, top-level)
@@ -172,8 +186,14 @@ proc generateModuleC(modStmts: seq[Stmt], modName: string): string =
   var gen = newCodeGen()
   result = gen.generateModule(modStmts, modName)
 
+proc getCacheDir(): string =
+  ## Returns ~/.cache/iris/, creating it if needed
+  result = getHomeDir() / ".cache" / "iris"
+  createDir(result)
+
 proc buildBinary(source, inputPath: string): string =
   let baseDir = parentDir(inputPath)
+  let cacheDir = getCacheDir()
   let stmts = compileToAst(source)
   let modules = resolveImports(stmts, baseDir)
 
@@ -182,13 +202,15 @@ proc buildBinary(source, inputPath: string): string =
   # Generate and write module C files
   for modName, info in modules:
     let modC = generateModuleC(info.stmts, modName)
-    let modCPath = baseDir / modName & ".c"
+    let flatName = modName.replace("/", "_")
+    let modCPath = cacheDir / flatName & ".c"
     writeFile(modCPath, modC)
     cFiles.add(modCPath)
 
   # Generate and write main C file
   let mainC = compileToC(source, baseDir, inputPath)
-  let mainCPath = inputPath.changeFileExt("c")
+  let mainName = extractFilename(inputPath).changeFileExt("c")
+  let mainCPath = cacheDir / mainName
   writeFile(mainCPath, mainC)
   cFiles.add(mainCPath)
 
@@ -198,9 +220,6 @@ proc buildBinary(source, inputPath: string): string =
   let runtimeDir = compilerDir / "runtime"
   let ccCmd = "cc " & cFiles.join(" ") & " -I" & runtimeDir & " -o " & binPath
   let (output, exitCode) = execCmdEx(ccCmd)
-
-  # Cleanup C files
-  for f in cFiles: removeFile(f)
 
   if exitCode != 0:
     raise newException(ValueError, "C compilation failed:\n" & output)
