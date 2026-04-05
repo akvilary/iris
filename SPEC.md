@@ -895,116 +895,161 @@ processRoles(roles)
 
 ## Collections
 
-### Arrays, Lists, Sequences
+### array[T, N] — fixed-size array
 
-| Syntax | What | Storage | Size |
-|--------|------|---------|------|
-| `array[int, 5]` | Fixed-size array | Stack (inline) | Known at compile-time |
-| `List[int]` | Dynamic list | Heap | Grows at runtime |
-| `Seq[int]` | Sequence | Stack or heap | Either `array[T, N]` or `List[T]` |
+Stack-allocated, size known at compile time.
 
 ```
-# Fixed array — stack
-@fixed: array[int, 5] = [1, 2, 3, 4, 5]
+@nums = [1, 2, 3, 4, 5]               # array[int, 5]
+@zeros array[int, 100] = [0: 100]     # fill syntax — 100 zeros
+```
 
-# Fill syntax — [value: count]
-@zeros array[int, 100] = [0: 100]       # 100 zeros
+#### array properties
 
-# Dynamic list — heap, created with ~[...]
-@dynamic mut = ~[1, 2, 3]
-dynamic.add(4)
+| Property | Type | Description |
+|----------|------|-------------|
+| `.len` | `int` | Number of elements (compile-time constant) |
+| `.cap` | `int` | Same as `.len` for arrays |
+| `[i]` | `T` | Element access by index |
 
-# Explicit type annotation also works
-@other mut List[int] = ~[10, 20, 30]
+### List[T] — dynamic heap array
 
-# Fill syntax for List — ~[value: count]
-@filled mut List[int] = ~[0: 100]        # List with 100 zeros
+Like Rust's `Vec<T>`. Created with `~[...]`. Metadata (pointer, length, capacity) on stack, data on heap.
 
-# Empty List with pre-allocated capacity — ~[:capacity]
-@reserved mut List[int] = ~[:100]         # len=0, capacity=100
-reserved.add(42)                          # no reallocation needed
-# reserved[0] before add → runtime error: index out of bounds
+```
+@nums mut = ~[1, 2, 3]                # List[int]
+nums.add(4)                            # append
+@other mut List[int] = ~[10, 20, 30]  # explicit type
+@filled mut List[int] = ~[0: 100]     # fill — 100 zeros
+@reserved mut List[int] = ~[:100]     # empty, capacity 100
+@empty mut = List[int]()              # empty list
+```
 
-# Empty List
-@empty mut = List[int]()
+#### List properties
 
-# Seq — accepts both array and List
+| Property | Type | Description |
+|----------|------|-------------|
+| `.len` | `int` | Number of elements |
+| `.cap` | `int` | Current capacity |
+| `[i]` | `T` | Element access by index |
+
+#### List methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `.add(val)` | `(T) → void` | Append element. Grows capacity 2x when full |
+| `.insert(i, val)` | `(int, T) → void` | Insert at index, shift right. O(n) |
+| `.remove(i)` | `(int) → void` | Remove at index, preserve order. O(n) |
+| `.removeSwap(i)` | `(int) → void` | Remove at index, swap with last. O(1) |
+| `.pop()` | `() → T` | Remove and return last element |
+| `.contains(val)` | `(T) → bool` | True if element exists. O(n) |
+| `.find(val)` | `(T) → int` | Index of element, or -1 if not found. O(n) |
+
+### Seq[T] — sequence
+
+Accepts both `array[T, N]` and `List[T]`. Use in function parameters to accept any sequence.
+
+```
 @sum func(@arr Seq[int]) ok int:
   result = 0
   for @x in arr:
     result = result + x
 
-sum(fixed)      # OK — Seq from stack array
-sum(dynamic)    # OK — Seq from List
+@fixed = [1, 2, 3]
+@dynamic mut = ~[4, 5, 6]
+sum(fixed)      # OK — array
+sum(dynamic)    # OK — List
 ```
+
+`Seq[T]` can be stored in object fields and captured in closures.
 
 ### view[T] — borrowed slice
 
-`view[T]` is a borrowed slice into a sequence (pointer + length). Like Rust's `&[T]`.
+Borrowed slice into a sequence (pointer + length). Like Rust's `&[T]`.
 Created by slicing an array, List, or Seq.
 
 ```
 @nums = [1, 2, 3, 4, 5]
-@slice view[int] = nums[1..3]     # view into elements 1, 2, 3
+@slice view[int] = nums[1..3]     # elements 1, 2, 3
 
 @dynamic mut = ~[10, 20, 30, 40]
-@part view[int] = dynamic[0..<2]  # view into elements 10, 20
+@part view[int] = dynamic[0..<2]  # elements 10, 20
 ```
 
-**Restrictions** — `view[T]` is a borrowed reference that may dangle:
+**Restrictions** — borrowed reference, may dangle:
 - Cannot be stored in object, error, or tuple fields
 - Cannot be captured in closures
 - Cannot outlive the source data
 
-```
-# ERROR — view in object field:
-@Bad object:
-  @data view[int]    # compile error: view cannot be stored in fields
+### String
 
-# ERROR — view in closure:
-@nums = [1, 2, 3]
-@slice view[int] = nums[0..1]
-@f = mv func() ok int as slice[0]  # compile error: view cannot be captured
-```
-
-### HashTable
-
-Inline hash table literal with `~{key: value}`:
+Owned heap string. Created with `~"..."`. Metadata (pointer, length, capacity) on stack, data on heap.
 
 ```
-# Create hash table:
-@headers = ~{"Content-Type": "json", "Authorization": "Bearer xxx"}
-
-# Type: HashTable[str, int]
-@scores: HashTable[str, int] = ~{"alice": 100, "bob": 85}
-
-# Access:
-*echo(headers["Content-Type"])
-
-# Empty:
-@empty = HashTable[str, int]()
+@s = ~"hello"                          # String
+@msg = ~"value: {x}"                   # String with interpolation
 ```
 
-Key type must be owned — `Seq[T]` is not allowed as a hash table key
-(it borrows data with a limited lifetime, but keys are stored long-term).
+#### String properties
 
-### HashSet
+| Property | Type | Description |
+|----------|------|-------------|
+| `.len` | `int` | Number of bytes |
+| `.data` | pointer | Raw data pointer (internal) |
 
-Inline hash set literal with `~{values}`:
+`str` is the immutable stack string (points to `.rodata`). Use `String` for owned mutable strings.
+
+### HashTable[K, V]
+
+Hash map. Created with `~{key: value}`. Uses wyhash + linear probing, grows at 75% load.
 
 ```
-@ids = ~{1, 2, 3, 4}
-# Type: HashSet[int]
+@scores = ~{"alice": 100, "bob": 85}  # HashTable[str, int]
+@empty = HashTable[str, int]()        # empty
 
-@names = ~{"Alice", "Bob", "Charlie"}
-# Type: HashSet[str]
-
-if 2 in ids:
-  *echo("found")
-
-# Empty:
-@empty = HashSet[int]()
+*echo(scores["alice"])                 # 100
 ```
+
+#### HashTable properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.len` | `int` | Number of entries |
+
+#### HashTable methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `.set(key, val)` | `(K, V) → void` | Insert or update entry |
+| `.get(key)` | `(K) → V` | Get value by key |
+| `.has(key)` | `(K) → bool` | True if key exists |
+| `.remove(key)` | `(K) → void` | Remove entry |
+| `.removeIf(key)` | `(K) → bool` | Remove if exists, return whether removed |
+
+### HashSet[T]
+
+Hash set. Created with `~{values}`. Same hash implementation as HashTable.
+
+```
+@ids = ~{1, 2, 3, 4}                  # HashSet[int]
+@names = ~{"Alice", "Bob"}            # HashSet[str]
+@empty = HashSet[int]()               # empty
+```
+
+#### HashSet properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.len` | `int` | Number of elements |
+
+#### HashSet methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `.add(val)` | `(T) → void` | Add element |
+| `.has(val)` | `(T) → bool` | True if element exists |
+| `.remove(val)` | `(T) → void` | Remove element |
+| `.removeIf(val)` | `(T) → bool` | Remove if exists, return whether removed |
 
 Compiler distinguishes by syntax: `~{k: v}` → HashTable, `~{v}` → HashSet.
 
