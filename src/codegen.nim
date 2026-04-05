@@ -80,6 +80,8 @@ proc flushPreStmts(g: var CodeGen) =
 
 # ── Type mapping ──
 
+proc ensureTupleType(g: var CodeGen, elemTypes: seq[string]): string
+
 proc typeToCStr*(g: var CodeGen, t: TypeExpr): string =
   if t == nil: return "void"
   if t of NamedType:
@@ -134,7 +136,10 @@ proc typeToCStr*(g: var CodeGen, t: TypeExpr): string =
       g.pendingSpecializations.add(td)
       name
   elif t of TupleType:
-    "/* tuple type */"
+    var elemTypes: seq[string]
+    for elem in TupleType(t).elems:
+      elemTypes.add(g.typeToCStr(elem))
+    g.ensureTupleType(elemTypes)
   else:
     "void"
 
@@ -441,6 +446,12 @@ proc inferCType(g: var CodeGen, e: Expr): string =
     if hs.elems.len > 0:
       return "iris_HS_" & g.inferCType(hs.elems[0])
     return "iris_HS_int64_t"
+  if e of TupleLitExpr:
+    let tup = TupleLitExpr(e)
+    var elemTypes: seq[string]
+    for el in tup.elems:
+      elemTypes.add(g.inferCType(el.value))
+    return g.ensureTupleType(elemTypes)
   if e of HeapAllocExpr:
     let inner = HeapAllocExpr(e).inner
     if inner.fn of IdentExpr:
@@ -803,6 +814,32 @@ proc ensureListType(g: var CodeGen, elemType: string) =
   else:
     s.add("static void " & listType & "_free(" & listType & "* s) { free(s->data); s->data = NULL; s->len = 0; s->cap = 0; }\n\n")
   g.pendingSpecializations.add(s)
+
+proc isTupleType(ct: string): bool = ct.startsWith("iris_tuple_")
+
+proc ensureTupleType(g: var CodeGen, elemTypes: seq[string]): string =
+  ## Generate a C struct for an unnamed tuple type: iris_tuple_T1_T2_...
+  let tupleType = "iris_tuple_" & elemTypes.join("_")
+  if tupleType in g.emittedSeqTypes: return tupleType
+  g.emittedSeqTypes.add(tupleType)
+  var s = "typedef struct { "
+  for i, et in elemTypes:
+    s.add(et & " _" & $i & "; ")
+  s.add("} " & tupleType & ";\n")
+  # Free function if any element needs freeing
+  var needsFreeFunc = false
+  for et in elemTypes:
+    if g.needsFree(et):
+      needsFreeFunc = true
+      break
+  if needsFreeFunc:
+    s.add("static void " & tupleType & "_free(" & tupleType & "* self) {\n")
+    for i, et in elemTypes:
+      if g.needsFree(et):
+        s.add("  " & g.freeExprStr("self->_" & $i, et) & "\n")
+    s.add("}\n")
+  g.pendingSpecializations.add(s)
+  return tupleType
 
 # ── Expression codegen ──
 
@@ -1350,6 +1387,13 @@ proc genExpr(g: var CodeGen, e: Expr) =
         g.genExpr(idx.index)
         g.emit(")")
         return
+      if varType.isTupleType():
+        # tuple[0] → tuple._0 (compile-time index)
+        if idx.index of IntLitExpr:
+          g.emit(varName & acc & "_" & $IntLitExpr(idx.index).val)
+        else:
+          g.emit("/* tuple index must be compile-time constant */")
+        return
     g.genExpr(idx.expr); g.emit("["); g.genExpr(idx.index); g.emit("]")
   elif e of MacroCallExpr:
     let mc = MacroCallExpr(e)
@@ -1364,11 +1408,17 @@ proc genExpr(g: var CodeGen, e: Expr) =
   elif e of QuestionExpr:
     g.genExpr(QuestionExpr(e).expr)
   elif e of TupleLitExpr:
-    g.emit("(")
-    for i, el in TupleLitExpr(e).elems:
+    let tup = TupleLitExpr(e)
+    var elemTypes: seq[string]
+    for el in tup.elems:
+      elemTypes.add(g.inferCType(el.value))
+    let tupleType = g.ensureTupleType(elemTypes)
+    g.emit("(" & tupleType & "){")
+    for i, el in tup.elems:
       if i > 0: g.emit(", ")
+      g.emit("._" & $i & " = ")
       g.genExpr(el.value)
-    g.emit(")")
+    g.emit("}")
   elif e of ArrayLitExpr:
     let a = ArrayLitExpr(e)
     let elemType = if a.fillValue != nil: g.inferCType(a.fillValue)

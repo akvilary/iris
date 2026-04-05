@@ -1,0 +1,4 @@
+# EXPECT RUN: 99
+@t mut = (10, 20)
+t[0] = 99
+*echo(t[0])
