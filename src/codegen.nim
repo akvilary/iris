@@ -1901,6 +1901,26 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         let stmt = g.freeExprStr(name, ct)
         if stmt.len > 0:
           g.emitLine(stmt)
+    # HashTable index assignment: ht["key"] = val → _set()
+    if a.target of IndexExpr:
+      let idx = IndexExpr(a.target)
+      if idx.expr of IdentExpr:
+        let varName = IdentExpr(idx.expr).name
+        let varType = g.varCType(varName)
+        if varType.isHashTableType():
+          let amp = if varName in g.refVars: "" else: "&"
+          g.emitIndent()
+          g.emit(varType & "_set(" & amp & varName & ", ")
+          g.genExpr(idx.index)
+          g.emit(", ")
+          g.genExpr(a.value)
+          g.emit(");\n")
+          # Track mv on reassignment
+          if a.isMv and a.value of IdentExpr:
+            let srcName = IdentExpr(a.value).name
+            if srcName notin g.movedVars:
+              g.movedVars.add(srcName)
+          return
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
     # Track mv on reassignment
     if a.isMv and a.value of IdentExpr:

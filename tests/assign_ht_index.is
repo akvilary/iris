@@ -1,0 +1,4 @@
+# EXPECT RUN: 10
+@ht mut = ~{"a": 1, "b": 2}
+ht["a"] = 10
+*echo(ht["a"])

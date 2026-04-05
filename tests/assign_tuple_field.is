@@ -1,0 +1,8 @@
+# EXPECT RUN: 99
+@Point tuple:
+  @x int
+  @y int
+
+@p mut = Point(x=10, y=20)
+p.x = 99
+*echo(p.x)
