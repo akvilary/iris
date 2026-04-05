@@ -35,37 +35,40 @@ Minimal compiler that can compile basic Iris programs to C.
 - [x] Semantic analyzer (between parser and codegen)
 - [x] Reject view[T] in object/error/tuple fields
 - [x] Assigned-before-use check (no zero-init)
-- [ ] Lambdas without capture (func as argument, no environment)
-- [ ] Closures with capture (heap environment struct, by reference)
-- [ ] Reject view[T] in closure captures
-- [ ] Ownership + borrow checker (immutable borrow, mut, mv)
-- [ ] Lifetime inference (3 rules, no annotations)
+- [x] Lambdas without capture (func as argument, no environment)
+- [x] Closures with capture (heap environment struct, by reference)
+- [x] Reject view[T] in closure captures
+- [x] Ownership + borrow checker (immutable borrow, mut, mv)
+- [x] Lifetime inference (3 rules, no annotations)
 - [ ] Pool for cyclic references
-- [ ] Compile-time verification of borrows
+- [x] Compile-time verification of borrows
 - [x] Compile-time variant field access checks
 
 ### Phase 4 — Collections + Strings
 
 - [x] array[T, N] (stack, struct-wrapped, fill syntax)
-- [x] Seq[T] (heap): literal, fill, capacity, add, remove, removeSwap, pop, insert, contains, find
+- [x] List[T] (heap): literal, fill, capacity, add, remove, removeSwap, pop, insert, contains, find
+- [x] Seq[T] (sequence: array on stack or List on heap)
 - [x] HashTable[K,V] (wyhash, linear probing, backward-shift deletion)
 - [x] HashSet[T] (same algorithm, separate implementation)
 - [x] view[T] (immutable view, pointer + length)
 - [x] Str (heap): ~"..." literal, Str() constructor, ~"...{expr}..." interpolation
-- [x] for-in iteration over array, Seq
+- [x] for-in iteration over array, Seq, List
+- [x] Index assignment: list[i], ht[key]
 
 ### Phase 5 — Concurrency
 
-- [ ] block (control flow, expressions, scoping)
-- [ ] spawn (thread pool)
+- [ ] block (structured concurrency scope)
+- [ ] spawn (thread pool, function call syntax — parsed, not yet in codegen)
 - [ ] channel[T] (buffered, unbuffered)
 - [ ] Thread safety (borrow checker prevents data races)
 - [ ] detach (long-lived tasks)
+- [ ] Zero-cost: no runtime linked when unused
 
 ### Phase 6 — Error Handling
 
 - [x] `ok T else E` syntax in signatures
-- [ ] `?` operator (proper codegen)
+- [ ] `?` operator (parsed, codegen not yet propagating errors)
 - [x] `result = Error(...)` (error return via result)
 - [x] `quit()` / `quit(error)`
 - [x] Compile-time check: raise matches signature
@@ -73,13 +76,23 @@ Minimal compiler that can compile basic Iris programs to C.
 ### Phase 7 — Metaprogramming
 
 - [ ] Macros (`*name()` call syntax)
-- [ ] `<<expr>>` unquote in ast.quote
+- [x] `<<expr>>` unquote syntax (changed from `^expr^`)
 - [ ] ast.expand, ast.export, ast.fieldsOf
 - [x] *echo as built-in macro
 - [ ] DSL support
 - [ ] `iris expand` for debugging
 
-### Phase 8 — Tooling
+### Phase 8 — Standard Library
+
+- [x] std/time (Duration, constants: Nanosecond..Hour)
+- [x] Stdlib import support, C cache in ~/.cache/iris/
+- [ ] std/io (file, stdin/stdout)
+- [ ] std/net (TCP, HTTP)
+- [ ] std/os (env, args, path)
+- [ ] std/math
+- [ ] std/json
+
+### Phase 9 — Tooling
 
 - [ ] `iris fmt` (mandatory formatter, 2-space indent)
 - [ ] `iris test` (test runner)
@@ -88,12 +101,12 @@ Minimal compiler that can compile basic Iris programs to C.
 - [ ] LSP (language server protocol)
 - [x] LSP-ready tokens (SemanticKind, len, comments preserved)
 
-### Phase 9 — Additional Targets
+### Phase 10 — Additional Targets
 
 - [ ] C++ code generation
-- [ ] JavaScript code generation
+- [ ] TypeScript code generation
 
-### Phase 10 — Self-hosting
+### Phase 11 — Self-hosting
 
 - [ ] Rewrite compiler in Iris
 - [ ] Bootstrap: Iris compiler compiles itself

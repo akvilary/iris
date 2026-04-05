@@ -38,7 +38,7 @@ type
     emittedSeqTypes*: seq[string]  # already emitted List/array/HT/HS specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
-    movedVars*: seq[string]  # variables moved via result = x or mv param
+    movedVars*: HashSet[string]  # variables moved via result = x or mv param
     scopeVars*: seq[seq[string]]  # stack of variable names per scope
     fnMvParams*: Table[string, seq[int]]  # func name -> indices of mv params
     fnParamMods*: Table[string, seq[ParamModifier]]  # func name -> param modifiers
@@ -562,7 +562,7 @@ proc ensureArrayType(g: var CodeGen, elemType, size: string) =
 proc hashFuncFor(ctype: string): string =
   case ctype
   of "iris_str": "iris_hash_str"
-  of "iris_String": "iris_hash_str"  # String has same data/len layout
+  of "iris_String": "iris_hash_String"
   of "int64_t", "int32_t", "int16_t", "int8_t",
      "uint64_t", "uint32_t", "uint16_t", "uint8_t": "iris_hash_int"
   of "double", "float": "iris_hash_double"
@@ -572,9 +572,11 @@ proc hashFuncFor(ctype: string): string =
 proc eqFuncFor(ctype: string): string =
   case ctype
   of "iris_str": "iris_eq_str"
-  of "iris_String": "iris_eq_str"
+  of "iris_String": "iris_eq_String"
   of "double", "float": "iris_eq_double"
   else: "iris_eq_int"
+
+proc isStrLike(ctype: string): bool = ctype in ["iris_str", "iris_String"]
 
 proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   let htType = "iris_HT_" & keyType & "__" & valType
@@ -582,30 +584,27 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   g.emittedSeqTypes.add(htType)
   let hashFn = hashFuncFor(keyType)
   let eqFn = eqFuncFor(keyType)
-  # For str keys, we need to cast to iris_str for hashing
-  let keyIsStr = keyType in ["iris_str", "iris_String"]
-  let hashCall = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[i])"
-                 else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")s->keys[i])"
-  let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
-                  else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")key)"
-  let eqCall = if keyIsStr: eqFn & "(*(iris_str*)&s->keys[i], *(iris_str*)&key)"
-               else: eqFn & "(s->keys[i], key)"
+  let hashCallK = hashFn & "(key)"
+  let eqCall = eqFn & "(s->keys[i], key)"
+  let freeKey = g.needsFree(keyType)
+  let freeVal = g.needsFree(valType)
+  let uu = "__attribute__((unused)) "
   var s = ""
-  # Struct: parallel arrays for used flags, keys, values
+  # Struct
   s.add("typedef struct { bool* used; " & keyType & "* keys; " & valType & "* vals; size_t cap; size_t len; } " & htType & ";\n")
-  # Create with capacity
-  s.add("static " & htType & " " & htType & "_new(size_t cap) {\n")
+  # new
+  s.add("static " & uu & htType & " " & htType & "_new(size_t cap) {\n")
   s.add("  if(cap<8) cap=8;\n")
   s.add("  bool* u=(bool*)calloc(cap,sizeof(bool));\n")
   s.add("  " & keyType & "* k=(" & keyType & "*)calloc(cap,sizeof(" & keyType & "));\n")
   s.add("  " & valType & "* v=(" & valType & "*)calloc(cap,sizeof(" & valType & "));\n")
   s.add("  return (" & htType & "){u,k,v,cap,0};\n}\n")
-  # Internal find slot
+  # findslot
   s.add("static size_t " & htType & "_findslot(" & htType & "* s, " & keyType & " key) {\n")
-  s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
+  s.add("  size_t i=" & hashCallK & "&(s->cap-1);\n")
   s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
   s.add("  return i;\n}\n")
-  # Grow
+  # grow
   s.add("static void " & htType & "_grow(" & htType & "* s) {\n")
   s.add("  size_t oldcap=s->cap; bool* ou=s->used; " & keyType & "* ok=s->keys; " & valType & "* ov=s->vals;\n")
   s.add("  s->cap*=2; s->len=0;\n")
@@ -614,37 +613,48 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("  s->vals=(" & valType & "*)calloc(s->cap,sizeof(" & valType & "));\n")
   s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & htType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->vals[j]=ov[i]; s->len++; }\n")
   s.add("  free(ou); free(ok); free(ov);\n}\n")
-  # set
-  s.add("static void " & htType & "_set(" & htType & "* s, " & keyType & " key, " & valType & " val) {\n")
-  s.add("  if(s->len*4>=s->cap*3) " & htType & "_grow(s);\n")  # 75% load factor
+  # set — free old value/key on overwrite
+  s.add("static " & uu & "void " & htType & "_set(" & htType & "* s, " & keyType & " key, " & valType & " val) {\n")
+  s.add("  if(s->len*4>=s->cap*3) " & htType & "_grow(s);\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
-  s.add("  if(!s->used[i]) s->len++;\n")
+  s.add("  if(s->used[i]) {\n")
+  if freeVal:
+    s.add("    " & g.freeExprStr("s->vals[i]", valType) & "\n")
+  if freeKey:
+    s.add("    " & g.freeExprStr("s->keys[i]", keyType) & "\n")
+  s.add("  } else { s->len++; }\n")
   s.add("  s->used[i]=true; s->keys[i]=key; s->vals[i]=val;\n}\n")
-  # get (returns value, undefined if missing)
-  s.add("static " & valType & " " & htType & "_get(" & htType & "* s, " & keyType & " key) {\n")
+  # get
+  s.add("static " & uu & valType & " " & htType & "_get(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  return s->vals[i];\n}\n")
   # has
-  s.add("static bool " & htType & "_has(" & htType & "* s, " & keyType & " key) {\n")
+  s.add("static " & uu & "bool " & htType & "_has(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  return s->used[i];\n}\n")
-  # remove
-  s.add("static void " & htType & "_remove(" & htType & "* s, " & keyType & " key) {\n")
+  # remove — free removed key/value, backward-shift
+  let hashCallJ = hashFn & "(s->keys[j])"
+  s.add("static " & uu & "void " & htType & "_remove(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return;\n")
+  if freeKey:
+    s.add("  " & g.freeExprStr("s->keys[i]", keyType) & "\n")
+  if freeVal:
+    s.add("  " & g.freeExprStr("s->vals[i]", valType) & "\n")
   s.add("  s->used[i]=false; s->len--;\n")
-  # backward-shift deletion
-  let hashCallJ = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[j])"
-                  else: hashFn & "((" & (if keyType == "double": "double" else: "int64_t") & ")s->keys[j])"
   s.add("  size_t j=i;\n")
   s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
   s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n}\n")
-  # removeIf (returns bool)
-  s.add("static bool " & htType & "_removeIf(" & htType & "* s, " & keyType & " key) {\n")
+  # removeIf
+  s.add("static " & uu & "bool " & htType & "_removeIf(" & htType & "* s, " & keyType & " key) {\n")
   s.add("  size_t i=" & htType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return false;\n")
+  if freeKey:
+    s.add("  " & g.freeExprStr("s->keys[i]", keyType) & "\n")
+  if freeVal:
+    s.add("  " & g.freeExprStr("s->vals[i]", valType) & "\n")
   s.add("  s->used[i]=false; s->len--;\n")
   s.add("  size_t j=i;\n")
   s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
@@ -653,13 +663,13 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->vals[i]=s->vals[j]; s->used[j]=false; i=j; }}\n")
   s.add("  return true;\n}\n")
   # free
-  if g.needsFree(keyType) or g.needsFree(valType):
+  if freeKey or freeVal:
     s.add("static void " & htType & "_free(" & htType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
     s.add("    if (s->used[i]) {\n")
-    if g.needsFree(keyType):
+    if freeKey:
       s.add("      " & g.freeExprStr("s->keys[i]", keyType) & "\n")
-    if g.needsFree(valType):
+    if freeVal:
       s.add("      " & g.freeExprStr("s->vals[i]", valType) & "\n")
     s.add("    }\n  }\n")
     s.add("  free(s->used); free(s->keys); free(s->vals);\n}\n\n")
@@ -673,18 +683,18 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   g.emittedSeqTypes.add(hsType)
   let hashFn = hashFuncFor(elemType)
   let eqFn = eqFuncFor(elemType)
-  let keyIsStr = elemType in ["iris_str", "iris_String"]
-  let hashCallK = if keyIsStr: hashFn & "(*(iris_str*)&key)"
-                  else: hashFn & "((" & (if elemType == "double": "double" else: "int64_t") & ")key)"
-  let eqCall = if keyIsStr: eqFn & "(*(iris_str*)&s->keys[i], *(iris_str*)&key)"
-               else: eqFn & "(s->keys[i], key)"
+  let hashCallK = hashFn & "(key)"
+  let eqCall = eqFn & "(s->keys[i], key)"
+  let freeElem = g.needsFree(elemType)
+  let uu = "__attribute__((unused)) "
+  let hashCallJ = hashFn & "(s->keys[j])"
   var s = ""
   s.add("typedef struct { bool* used; " & elemType & "* keys; size_t cap; size_t len; } " & hsType & ";\n")
-  s.add("static " & hsType & " " & hsType & "_new(size_t cap) {\n")
+  s.add("static " & uu & hsType & " " & hsType & "_new(size_t cap) {\n")
   s.add("  if(cap<8) cap=8;\n")
   s.add("  return (" & hsType & "){(bool*)calloc(cap,sizeof(bool)),(" & elemType & "*)calloc(cap,sizeof(" & elemType & ")),cap,0};\n}\n")
   s.add("static size_t " & hsType & "_findslot(" & hsType & "* s, " & elemType & " key) {\n")
-  s.add("  uint64_t h=" & hashCallK & "; size_t i=h&(s->cap-1);\n")
+  s.add("  size_t i=" & hashCallK & "&(s->cap-1);\n")
   s.add("  while(s->used[i] && !" & eqCall & ") i=(i+1)&(s->cap-1);\n")
   s.add("  return i;\n}\n")
   s.add("static void " & hsType & "_grow(" & hsType & "* s) {\n")
@@ -694,29 +704,36 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("  s->keys=(" & elemType & "*)calloc(s->cap,sizeof(" & elemType & "));\n")
   s.add("  for(size_t i=0;i<oldcap;i++) if(ou[i]){ size_t j=" & hsType & "_findslot(s,ok[i]); s->used[j]=true; s->keys[j]=ok[i]; s->len++; }\n")
   s.add("  free(ou); free(ok);\n}\n")
-  s.add("static void " & hsType & "_add(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static " & uu & "void " & hsType & "_add(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  if(s->len*4>=s->cap*3) " & hsType & "_grow(s);\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
-  s.add("  if(!s->used[i]) s->len++;\n")
+  if freeElem:
+    s.add("  if(s->used[i]) { " & g.freeExprStr("s->keys[i]", elemType) & " }\n")
+    s.add("  else { s->len++; }\n")
+  else:
+    s.add("  if(!s->used[i]) s->len++;\n")
   s.add("  s->used[i]=true; s->keys[i]=key;\n}\n")
-  s.add("static bool " & hsType & "_has(" & hsType & "* s, " & elemType & " key) {\n")
+  s.add("static " & uu & "bool " & hsType & "_has(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  return s->used[i];\n}\n")
-  s.add("static void " & hsType & "_remove(" & hsType & "* s, " & elemType & " key) {\n")
+  # remove — free element before backward-shift
+  s.add("static " & uu & "void " & hsType & "_remove(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return;\n")
+  if freeElem:
+    s.add("  " & g.freeExprStr("s->keys[i]", elemType) & "\n")
   s.add("  s->used[i]=false; s->len--;\n")
   s.add("  size_t j=i;\n")
   s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
-  let hashCallJ = if keyIsStr: hashFn & "(*(iris_str*)&s->keys[j])"
-                  else: hashFn & "((" & (if elemType == "double": "double" else: "int64_t") & ")s->keys[j])"
   s.add("    size_t nat=" & hashCallJ & "&(s->cap-1);\n")
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n}\n")
-  # removeIf (returns bool)
-  s.add("static bool " & hsType & "_removeIf(" & hsType & "* s, " & elemType & " key) {\n")
+  # removeIf
+  s.add("static " & uu & "bool " & hsType & "_removeIf(" & hsType & "* s, " & elemType & " key) {\n")
   s.add("  size_t i=" & hsType & "_findslot(s,key);\n")
   s.add("  if(!s->used[i]) return false;\n")
+  if freeElem:
+    s.add("  " & g.freeExprStr("s->keys[i]", elemType) & "\n")
   s.add("  s->used[i]=false; s->len--;\n")
   s.add("  size_t j=i;\n")
   s.add("  while(1){ j=(j+1)&(s->cap-1); if(!s->used[j]) break;\n")
@@ -724,7 +741,7 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
   s.add("    if((j>i && (nat<=i || nat>j)) || (j<i && nat<=i && nat>j))\n")
   s.add("      { s->used[i]=true; s->keys[i]=s->keys[j]; s->used[j]=false; i=j; }}\n")
   s.add("  return true;\n}\n")
-  if g.needsFree(elemType):
+  if freeElem:
     s.add("static void " & hsType & "_free(" & hsType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->cap; i++) {\n")
     s.add("    if (s->used[i]) " & g.freeExprStr("s->keys[i]", elemType) & "\n")
@@ -763,56 +780,69 @@ proc ensureListType(g: var CodeGen, elemType: string) =
   let listType = "iris_List_" & elemType
   if listType in g.emittedSeqTypes: return
   g.emittedSeqTypes.add(listType)
+  let freeElem = g.needsFree(elemType)
+  let eqCall = if elemType.isStrLike(): eqFuncFor(elemType) else: ""
+  let uu = "__attribute__((unused)) "
   var s = ""
   s.add("typedef struct { " & elemType & "* data; size_t len; size_t cap; } " & listType & ";\n")
-  # from N elements
-  s.add("static " & listType & " " & listType & "_from(" & elemType & "* arr, size_t n) {\n")
+  # from N elements — memcpy for POD, loop for heap types
+  s.add("static " & uu & listType & " " & listType & "_from(" & elemType & "* arr, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
-  s.add("  for (size_t i = 0; i < n; i++) data[i] = arr[i];\n")
+  s.add("  memcpy(data, arr, n * sizeof(" & elemType & "));\n")
   s.add("  return (" & listType & "){data, n, n};\n}\n")
   # fill
-  s.add("static " & listType & " " & listType & "_fill(" & elemType & " val, size_t n) {\n")
+  s.add("static " & uu & listType & " " & listType & "_fill(" & elemType & " val, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
   s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
   s.add("  return (" & listType & "){data, n, n};\n}\n")
   # with capacity
-  s.add("static " & listType & " " & listType & "_with_cap(size_t cap) {\n")
+  s.add("static " & uu & listType & " " & listType & "_with_cap(size_t cap) {\n")
   s.add("  return (" & listType & "){(" & elemType & "*)malloc(cap * sizeof(" & elemType & ")), 0, cap};\n}\n")
   # add
-  s.add("static void " & listType & "_add(" & listType & "* s, " & elemType & " val) {\n")
+  s.add("static " & uu & "void " & listType & "_add(" & listType & "* s, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
   s.add("  }\n  s->data[s->len++] = val;\n}\n")
-  # remove (remove at index, preserve order, O(n))
-  s.add("static void " & listType & "_remove(" & listType & "* s, size_t i) {\n")
+  # remove — free removed element, then shift
+  s.add("static " & uu & "void " & listType & "_remove(" & listType & "* s, size_t i) {\n")
+  if freeElem:
+    s.add("  " & g.freeExprStr("s->data[i]", elemType) & "\n")
   s.add("  for (size_t j = i; j < s->len - 1; j++) s->data[j] = s->data[j + 1];\n")
   s.add("  s->len--;\n}\n")
-  # removeSwap (remove at index, swap with last, O(1))
-  s.add("static void " & listType & "_removeSwap(" & listType & "* s, size_t i) {\n")
+  # removeSwap — free removed element, swap with last
+  s.add("static " & uu & "void " & listType & "_removeSwap(" & listType & "* s, size_t i) {\n")
+  if freeElem:
+    s.add("  " & g.freeExprStr("s->data[i]", elemType) & "\n")
   s.add("  s->data[i] = s->data[s->len - 1];\n")
   s.add("  s->len--;\n}\n")
-  # pop (remove and return last)
-  s.add("static " & elemType & " " & listType & "_pop(" & listType & "* s) {\n")
+  # pop (returns element — caller owns it, no free here)
+  s.add("static " & uu & elemType & " " & listType & "_pop(" & listType & "* s) {\n")
   s.add("  return s->data[--s->len];\n}\n")
-  # insert (insert at index, shift right, O(n))
-  s.add("static void " & listType & "_insert(" & listType & "* s, size_t i, " & elemType & " val) {\n")
+  # insert
+  s.add("static " & uu & "void " & listType & "_insert(" & listType & "* s, size_t i, " & elemType & " val) {\n")
   s.add("  if (s->len == s->cap) {\n")
   s.add("    s->cap = s->cap == 0 ? 4 : s->cap * 2;\n")
   s.add("    s->data = (" & elemType & "*)realloc(s->data, s->cap * sizeof(" & elemType & "));\n")
   s.add("  }\n")
   s.add("  for (size_t j = s->len; j > i; j--) s->data[j] = s->data[j - 1];\n")
   s.add("  s->data[i] = val;\n  s->len++;\n}\n")
-  # contains (returns bool)
-  s.add("static bool " & listType & "_contains(" & listType & "* s, " & elemType & " val) {\n")
-  s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return true;\n")
+  # contains — correct comparison for str/String
+  s.add("static " & uu & "bool " & listType & "_contains(" & listType & "* s, " & elemType & " val) {\n")
+  if eqCall.len > 0:
+    s.add("  for (size_t i = 0; i < s->len; i++) if (" & eqCall & "(s->data[i], val)) return true;\n")
+  else:
+    s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return true;\n")
   s.add("  return false;\n}\n")
-  # find (returns index, -1 if not found)
-  s.add("static int64_t " & listType & "_find(" & listType & "* s, " & elemType & " val) {\n")
-  s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
+  # find — correct comparison for str/String
+  s.add("static " & uu & "int64_t " & listType & "_find(" & listType & "* s, " & elemType & " val) {\n")
+  if eqCall.len > 0:
+    s.add("  for (size_t i = 0; i < s->len; i++) if (" & eqCall & "(s->data[i], val)) return (int64_t)i;\n")
+  else:
+    s.add("  for (size_t i = 0; i < s->len; i++) if (s->data[i] == val) return (int64_t)i;\n")
   s.add("  return -1;\n}\n")
   # free
-  if g.needsFree(elemType):
+  if freeElem:
     s.add("static void " & listType & "_free(" & listType & "* s) {\n")
     s.add("  for (size_t i = 0; i < s->len; i++) " & g.freeExprStr("s->data[i]", elemType) & "\n")
     s.add("  free(s->data); s->data = NULL; s->len = 0; s->cap = 0;\n}\n\n")
@@ -913,12 +943,18 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     g.emit(")")
   else:
     let ct = g.inferCType(e)
-    # Non-trivial expression returning string — use temp variable
-    # (IdentExpr is handled in genEchoArg, literals handled above)
-    if ct in ["iris_str", "iris_String"] and not (e of IdentExpr):
+    # String expression — only need temp for calls that allocate (owned String)
+    # FieldAccessExpr, IndexExpr, IdentExpr are safe to read directly
+    if ct in ["iris_str", "iris_String"] and not (e of IdentExpr) and not (e of FieldAccessExpr) and not (e of IndexExpr):
       g.emit("{ " & ct & " iris_echo_tmp = ")
       g.genExpr(e)
       g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data); }")
+    elif ct in ["iris_str", "iris_String"] and (e of FieldAccessExpr or e of IndexExpr):
+      g.emit("printf(\"%.*s\\n\", (int)")
+      g.genExpr(e)
+      g.emit(".len, ")
+      g.genExpr(e)
+      g.emit(".data)")
     elif ct.isListType() and e of IdentExpr:
       let name = IdentExpr(e).name
       let elemType = listElemType(ct)
@@ -946,9 +982,11 @@ proc genExpr(g: var CodeGen, e: Expr) =
   if e of IntLitExpr: g.emit($IntLitExpr(e).val)
   elif e of FloatLitExpr: g.emit($FloatLitExpr(e).val)
   elif e of StringLitExpr:
-    g.emit("iris_str_from(\"" & escapeC(StringLitExpr(e).val) & "\")")
+    let val = StringLitExpr(e).val
+    g.emit("(iris_str){\"" & escapeC(val) & "\", " & $val.len & "}")
   elif e of StrLitExpr:
-    g.emit("iris_String_from(\"" & escapeC(StrLitExpr(e).val) & "\")")
+    let val = StrLitExpr(e).val
+    g.emit("iris_String_from_len(\"" & escapeC(val) & "\", " & $val.len & ")")
   elif e of StrInterpExpr:
     var fmt = ""
     var exprs: seq[Expr]
@@ -1117,7 +1155,8 @@ proc genExpr(g: var CodeGen, e: Expr) =
       # Str("literal") or Str(view) → owned string
       if name == "String" and c.args.len == 1:
         if c.args[0].value of StringLitExpr:
-          g.emit("iris_String_from(\"" & escapeC(StringLitExpr(c.args[0].value).val) & "\")")
+          let sval = StringLitExpr(c.args[0].value).val
+          g.emit("iris_String_from_len(\"" & escapeC(sval) & "\", " & $sval.len & ")")
         else:
           g.emit("iris_String_from_view(")
           g.genExpr(c.args[0].value)
@@ -1822,11 +1861,11 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         # mv — ownership transfer: mark source as moved
         let srcType = g.varCType(srcName)
         if g.needsFree(srcType) and srcName notin g.movedVars:
-          g.movedVars.add(srcName)
+          g.movedVars.incl(srcName)
       else:
         # Reference — don't free this var (it doesn't own the data)
         if g.needsFree(ctype) and d.name notin g.movedVars:
-          g.movedVars.add(d.name)
+          g.movedVars.incl(d.name)
     # Track moved args for mv params in function calls
     if d.value != nil and d.value of CallExpr:
       let call = CallExpr(d.value)
@@ -1837,7 +1876,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
             if idx < call.args.len and call.args[idx].value of IdentExpr:
               let argName = IdentExpr(call.args[idx].value).name
               if argName notin g.movedVars:
-                g.movedVars.add(argName)
+                g.movedVars.incl(argName)
 
   elif s of DestructDeclStmt:
     let dd = DestructDeclStmt(s)
@@ -1974,14 +2013,14 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
           if a.isMv and a.value of IdentExpr:
             let srcName = IdentExpr(a.value).name
             if srcName notin g.movedVars:
-              g.movedVars.add(srcName)
+              g.movedVars.incl(srcName)
           return
     g.emitIndent(); g.genExpr(a.target); g.emit(" = "); g.genExpr(a.value); g.emit(";\n")
     # Track mv on reassignment
     if a.isMv and a.value of IdentExpr:
       let srcName = IdentExpr(a.value).name
       if srcName notin g.movedVars:
-        g.movedVars.add(srcName)
+        g.movedVars.incl(srcName)
 
   elif s of ResultAssignStmt:
     let rs = ResultAssignStmt(s)
@@ -2022,7 +2061,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let varName = IdentExpr(val).name
       let ct = g.varCType(varName)
       if g.needsFree(ct) and varName notin g.movedVars:
-        g.movedVars.add(varName)
+        g.movedVars.incl(varName)
 
   elif s of FnDeclStmt:
     let f = FnDeclStmt(s)
@@ -2080,7 +2119,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.inResultFunc = true
       g.currentResultName = resultName
       let savedMoved = g.movedVars
-      g.movedVars = @[]
+      g.movedVars = initHashSet[string]()
       g.pushScope()
       let savedRefs = g.refVars
       g.refVars = initHashSet[string]()
@@ -2119,7 +2158,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       g.indent += 1
       if hasReturn: g.emitLine(ret & " iris_result;")
       let savedMoved = g.movedVars
-      g.movedVars = @[]
+      g.movedVars = initHashSet[string]()
       g.pushScope()
       let savedRefs = g.refVars
       g.refVars = initHashSet[string]()
@@ -2297,7 +2336,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
             if idx < call.args.len and call.args[idx].value of IdentExpr:
               let argName = IdentExpr(call.args[idx].value).name
               if argName notin g.movedVars:
-                g.movedVars.add(argName)
+                g.movedVars.incl(argName)
 
   elif s of ObjectDeclStmt:
     let o = ObjectDeclStmt(s)

@@ -35,6 +35,12 @@ static inline iris_String iris_String_from(const char* s) {
   return (iris_String){data, len, len};
 }
 
+static inline iris_String iris_String_from_len(const char* s, size_t len) {
+  char* data = (char*)malloc(len + 1);
+  memcpy(data, s, len + 1);
+  return (iris_String){data, len, len};
+}
+
 static inline iris_String iris_String_from_str(iris_str v) {
   char* data = (char*)malloc(v.len + 1);
   memcpy(data, v.data, v.len);
@@ -43,9 +49,16 @@ static inline iris_String iris_String_from_str(iris_str v) {
 }
 
 static inline iris_String iris_String_fmt(const char* fmt, ...) {
+  char buf[128];
   va_list a1, a2;
   va_start(a1, fmt); va_copy(a2, a1);
-  int len = vsnprintf(NULL, 0, fmt, a1); va_end(a1);
+  int len = vsnprintf(buf, sizeof(buf), fmt, a1); va_end(a1);
+  if (len < (int)sizeof(buf)) {
+    char* data = (char*)malloc(len + 1);
+    memcpy(data, buf, len + 1);
+    va_end(a2);
+    return (iris_String){data, (size_t)len, (size_t)len};
+  }
   char* data = (char*)malloc(len + 1);
   vsnprintf(data, len + 1, fmt, a2); va_end(a2);
   return (iris_String){data, (size_t)len, (size_t)len};
@@ -106,6 +119,8 @@ static inline uint64_t wyhash64(uint64_t A, uint64_t B) {
 
 static inline uint64_t iris_hash_str(iris_str s) { return wyhash(s.data, s.len, 0, _wyp); }
 static inline bool iris_eq_str(iris_str a, iris_str b) { return a.len==b.len && memcmp(a.data,b.data,a.len)==0; }
+static inline uint64_t iris_hash_String(iris_String s) { return wyhash(s.data, s.len, 0, _wyp); }
+static inline bool iris_eq_String(iris_String a, iris_String b) { return a.len==b.len && memcmp(a.data,b.data,a.len)==0; }
 static inline uint64_t iris_hash_int(int64_t v) { return wyhash64((uint64_t)v, 0); }
 static inline bool iris_eq_int(int64_t a, int64_t b) { return a==b; }
 static inline uint64_t iris_hash_double(double v) { uint64_t u; memcpy(&u,&v,8); return wyhash64(u, 0); }
