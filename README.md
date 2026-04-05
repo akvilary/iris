@@ -226,24 +226,19 @@ Stack by default. Heap only when you ask for it — always with `~`:
 
 ### Structured concurrency
 
-No async/await. Concurrency is `block` + `spawn` — structured and guaranteed to clean up:
+No async/await. Concurrency is `spawn` — calls functions asynchronously:
 
 ```
-# Parallel fetch — both complete before block exits:
-@results block:
-  spawn: fetch("url1")
-  spawn: fetch("url2")
+# Parallel fetch — spawn returns result:
+@a = spawn fetch("url1")
+@b = spawn fetch("url2")
+# a and b available when accessed
 
-# First to complete wins:
-@race block:
-  spawn:
-    @val = ch1.receive()
-    if val:
-      process(val.get())
-      break race
-  spawn:
-    after(5.sec)
-    break race
+# Structured — block waits for all spawns:
+block:
+  spawn fetch("url1")
+  spawn fetch("url2")
+# <- both complete
 ```
 
 Channels transfer ownership — no shared mutable state, no data races:

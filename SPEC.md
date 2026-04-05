@@ -1835,27 +1835,20 @@ ch.send(data.clone())   # send a copy
 ```
 # Wait for all (like doAll) — block waits for every spawn:
 block:
-  spawn: loadUsers()
-  spawn: loadPosts()
-  spawn: loadConfig()
+  spawn loadUsers()
+  spawn loadPosts()
+  spawn loadConfig()
 # <- all three complete
 
 # First to complete wins (like doOne/select) — break on success:
 @race block:
-  spawn:
-    @val = ch1.receive()
-    if val:
-      process(->val)
-      break race
-  spawn:
-    @val = ch2.receive()
-    if val:
-      process(->val)
-      break race
-  spawn:
-    after(5.sec)
-    *echo("Timeout!")
-    break race
+  @v1 = spawn ch1.receive()
+  @v2 = spawn ch2.receive()
+  @timeout = spawn after(5.sec)
+  case:
+    of v1: process(->v1); break race
+    of v2: process(->v2); break race
+    of timeout: *echo("Timeout!"); break race
 ```
 
 ### No Colored Functions (no async/await)
@@ -1878,20 +1871,17 @@ Iris has **no async/await**. All functions are the same:
   *echo(->data)
 ```
 
-Concurrency is achieved via `block spawn`, not async/await:
+Concurrency is achieved via `spawn`, not async/await:
 
 ```
 # Sequential — regular call:
 @a = fetch("url1")?
 @b = fetch("url2")?
 
-# Parallel — block spawn:
-@a mut bytes
-@b mut bytes
-@w block:
-  spawn: a = fetch("url1")?
-  spawn: b = fetch("url2")?
-# <- both complete, a and b available
+# Parallel — spawn returns result:
+@a = spawn fetch("url1")
+@b = spawn fetch("url2")
+# a and b are available when accessed (implicit await)
 ```
 
 Each `spawn` body is compiled as a separate function and executed in a thread pool
