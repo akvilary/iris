@@ -2,7 +2,7 @@
 ## Usage: irisc <command> <file.is>
 ## Commands: build, run, tokens, parse, emit
 
-import std/[os, strutils, osproc, tables]
+import std/[os, strutils, osproc, tables, sets]
 import token, lexer, ast, parser, sema, codegen
 
 proc compileToAst(source: string): seq[Stmt] =
@@ -145,7 +145,7 @@ proc compileToC(source: string, baseDir: string, filename: string = ""): string 
         let valType = gen.typeToCStr(f.returnType)
         let resultName = f.name & "_Result"
         if resultName notin gen.okTypes:
-          gen.okTypes.add(resultName)
+          gen.okTypes.incl(resultName)
           gen.emit("typedef enum { " & resultName & "_Ok")
           for et in f.errorTypes:
             gen.emit(", " & resultName & "_" & gen.typeToCStr(et))

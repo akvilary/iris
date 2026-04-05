@@ -22,7 +22,7 @@ type
     errorNames: seq[string]
     variantInfo: Table[string, VariantInfo]  # type name -> variant info
     activeCaseBranch: Table[string, seq[string]]  # var name -> allowed variant values
-    okTypes*: seq[string]  # Ok types already emitted
+    okTypes*: HashSet[string]  # Ok types already emitted
     fnReturnTypes*: Table[string, string]  # func name -> C return type
     fnParamTypes*: Table[string, seq[string]]  # func name -> param C types
     inResultFunc: bool    # inside a function with error types
@@ -34,8 +34,8 @@ type
     genericFuncs*: Table[string, FnDeclStmt]  # generic func name -> AST
     concepts*: Table[string, ConceptDeclStmt]  # concept name -> definition
     typeMethods*: Table[string, seq[tuple[name: string, paramTypes: seq[string], retType: string]]]
-    emittedSpecializations*: seq[string]  # already emitted specializations
-    emittedSeqTypes*: seq[string]  # already emitted List/array/HT/HS specializations
+    emittedSpecializations*: HashSet[string]  # already emitted specializations
+    emittedSeqTypes*: HashSet[string]  # already emitted List/array/HT/HS specializations
     pendingSpecializations*: string  # code to emit before main
     tmpCounter: int  # monotonic counter for unique temp names
     movedVars*: HashSet[string]  # variables moved via result = x or mv param
@@ -348,6 +348,17 @@ proc substituteType(t: TypeExpr, subs: Table[string, string]): TypeExpr =
   return t
 
 proc escapeC(s: string): string =
+  ## Escape for C string literals (NOT printf format strings)
+  for ch in s:
+    case ch
+    of '\n': result.add("\\n")
+    of '\t': result.add("\\t")
+    of '\\': result.add("\\\\")
+    of '"': result.add("\\\"")
+    else: result.add(ch)
+
+proc escapePrintf(s: string): string =
+  ## Escape for printf/vsnprintf format strings (% must be doubled)
   for ch in s:
     case ch
     of '\n': result.add("\\n")
@@ -554,7 +565,7 @@ proc ensureOptionType(g: var CodeGen, valType, optType: string)
 proc ensureArrayType(g: var CodeGen, elemType, size: string) =
   let arrType = "iris_array_" & elemType & "_" & size
   if arrType in g.emittedSeqTypes: return  # reuse the same tracking list
-  g.emittedSeqTypes.add(arrType)
+  g.emittedSeqTypes.incl(arrType)
   var s = ""
   s.add("typedef struct { " & elemType & " data[" & size & "]; } " & arrType & ";\n\n")
   g.pendingSpecializations.add(s)
@@ -581,7 +592,7 @@ proc isStrLike(ctype: string): bool = ctype in ["iris_str", "iris_String"]
 proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
   let htType = "iris_HT_" & keyType & "__" & valType
   if htType in g.emittedSeqTypes: return
-  g.emittedSeqTypes.add(htType)
+  g.emittedSeqTypes.incl(htType)
   let hashFn = hashFuncFor(keyType)
   let eqFn = eqFuncFor(keyType)
   let hashCallK = hashFn & "(key)"
@@ -680,7 +691,7 @@ proc ensureHashTableType(g: var CodeGen, keyType, valType: string) =
 proc ensureHashSetType(g: var CodeGen, elemType: string) =
   let hsType = "iris_HS_" & elemType
   if hsType in g.emittedSeqTypes: return
-  g.emittedSeqTypes.add(hsType)
+  g.emittedSeqTypes.incl(hsType)
   let hashFn = hashFuncFor(elemType)
   let eqFn = eqFuncFor(elemType)
   let hashCallK = hashFn & "(key)"
@@ -754,7 +765,7 @@ proc ensureHashSetType(g: var CodeGen, elemType: string) =
 proc ensureHeapType(g: var CodeGen, innerType: string) =
   let heapType = "iris_Heap_" & innerType
   if heapType in g.emittedSpecializations: return
-  g.emittedSpecializations.add(heapType)
+  g.emittedSpecializations.incl(heapType)
   var s = ""
   s.add("typedef " & innerType & "* " & heapType & ";\n")
   s.add("static " & heapType & " " & heapType & "_alloc(" & innerType & " val) {\n")
@@ -779,7 +790,7 @@ proc ensureHeapType(g: var CodeGen, innerType: string) =
 proc ensureListType(g: var CodeGen, elemType: string) =
   let listType = "iris_List_" & elemType
   if listType in g.emittedSeqTypes: return
-  g.emittedSeqTypes.add(listType)
+  g.emittedSeqTypes.incl(listType)
   let freeElem = g.needsFree(elemType)
   let eqCall = if elemType.isStrLike(): eqFuncFor(elemType) else: ""
   let uu = "__attribute__((unused)) "
@@ -793,7 +804,11 @@ proc ensureListType(g: var CodeGen, elemType: string) =
   # fill
   s.add("static " & uu & listType & " " & listType & "_fill(" & elemType & " val, size_t n) {\n")
   s.add("  " & elemType & "* data = (" & elemType & "*)malloc(n * sizeof(" & elemType & "));\n")
-  s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
+  if elemType == "iris_String":
+    s.add("  for (size_t i = 0; i < n; i++) data[i] = iris_String_from_len(val.data, val.len);\n")
+    s.add("  iris_String_free(&val);\n")
+  else:
+    s.add("  for (size_t i = 0; i < n; i++) data[i] = val;\n")
   s.add("  return (" & listType & "){data, n, n};\n}\n")
   # with capacity
   s.add("static " & uu & listType & " " & listType & "_with_cap(size_t cap) {\n")
@@ -856,7 +871,7 @@ proc ensureTupleType(g: var CodeGen, elemTypes: seq[string]): string =
   ## Generate a C struct for an unnamed tuple type: iris_tuple_T1_T2_...
   let tupleType = "iris_tuple_" & elemTypes.join("_")
   if tupleType in g.emittedSeqTypes: return tupleType
-  g.emittedSeqTypes.add(tupleType)
+  g.emittedSeqTypes.incl(tupleType)
   var s = "typedef struct { "
   for i, et in elemTypes:
     s.add(et & " _" & $i & "; ")
@@ -928,7 +943,7 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     var exprs: seq[Expr]
     for p in parts:
       if not p.isExpr:
-        fmt.add(escapeC(p.lit))
+        fmt.add(escapePrintf(p.lit))
       else:
         let (f, _) = g.printfFormat(p.expr)
         fmt.add(f)
@@ -948,7 +963,10 @@ proc genEcho(g: var CodeGen, args: seq[CallArg]) =
     if ct in ["iris_str", "iris_String"] and not (e of IdentExpr) and not (e of FieldAccessExpr) and not (e of IndexExpr):
       g.emit("{ " & ct & " iris_echo_tmp = ")
       g.genExpr(e)
-      g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data); }")
+      g.emit("; printf(\"%.*s\\n\", (int)iris_echo_tmp.len, iris_echo_tmp.data);")
+      if ct == "iris_String":
+        g.emit(" iris_String_free(&iris_echo_tmp);")
+      g.emit(" }")
     elif ct in ["iris_str", "iris_String"] and (e of FieldAccessExpr or e of IndexExpr):
       g.emit("printf(\"%.*s\\n\", (int)")
       g.genExpr(e)
@@ -992,7 +1010,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
     var exprs: seq[Expr]
     for p in StrInterpExpr(e).parts:
       if not p.isExpr:
-        fmt.add(escapeC(p.lit))
+        fmt.add(escapePrintf(p.lit))
       else:
         let (f, _) = g.printfFormat(p.expr)
         fmt.add(f)
@@ -1277,7 +1295,7 @@ proc genExpr(g: var CodeGen, e: Expr) =
         let specName = name & "_" & gf.genericParams.mapIt(subs.getOrDefault(it.name, "unknown")).join("_")
         # Emit specialization if not yet emitted
         if specName notin g.emittedSpecializations:
-          g.emittedSpecializations.add(specName)
+          g.emittedSpecializations.incl(specName)
           # Generate specialized function into pending buffer
           let origOutput = g.output
           let origIndent = g.indent
@@ -1995,6 +2013,19 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
         let stmt = g.freeExprStr(name, ct)
         if stmt.len > 0:
           g.emitLine(stmt)
+    elif a.target of FieldAccessExpr:
+      let fa = FieldAccessExpr(a.target)
+      if fa.expr of IdentExpr:
+        let objName = IdentExpr(fa.expr).name
+        let objType = g.varCType(objName)
+        let lookupType = if objType.startsWith("iris_Heap_"): objType[10..^1] else: objType
+        if lookupType in g.typeFields:
+          for f in g.typeFields[lookupType]:
+            if f.name == fa.field and g.needsFree(f.ctype):
+              let acc = if objName in g.refVars or objType.startsWith("iris_Heap_"): "->" else: "."
+              let fieldExpr = objName & acc & fa.field
+              g.emitLine(g.freeExprStr(fieldExpr, f.ctype))
+              break
     # HashTable index assignment: ht["key"] = val → _set()
     if a.target of IndexExpr:
       let idx = IndexExpr(a.target)
@@ -2089,7 +2120,7 @@ proc genStmt*(g: var CodeGen, s: Stmt) =
       let resultName = f.name & "_Result"
       # Emit result struct if not yet emitted
       if resultName notin g.okTypes:
-        g.okTypes.add(resultName)
+        g.okTypes.incl(resultName)
         g.emit("typedef enum { " & resultName & "_Ok")
         for et in f.errorTypes:
           g.emit(", " & resultName & "_" & g.typeToCStr(et))
@@ -2634,7 +2665,7 @@ proc emitPreamble*(g: var CodeGen) =
 proc ensureOptionType(g: var CodeGen, valType, optType: string) =
   ## Emit Option typedef if not yet emitted.
   if optType notin g.okTypes:
-    g.okTypes.add(optType)
+    g.okTypes.incl(optType)
     g.pendingSpecializations.add("typedef struct { bool has; " & valType & " value; } " & optType & ";\n")
 
 proc sanitizeModName*(name: string): string =
@@ -2707,7 +2738,7 @@ proc generate*(g: var CodeGen, stmts: seq[Stmt]): string =
         let valType = g.typeToCStr(f.returnType)
         let resultName = f.name & "_Result"
         if resultName notin g.okTypes:
-          g.okTypes.add(resultName)
+          g.okTypes.incl(resultName)
           g.emit("typedef enum { " & resultName & "_Ok")
           for et in f.errorTypes:
             g.emit(", " & resultName & "_" & g.typeToCStr(et))
